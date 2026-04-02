@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import "./App.css";
 
 // ─── Formatting helpers ───
@@ -492,6 +492,362 @@ function QuickMode({ prices, markup }) {
   );
 }
 
+// ─── AI System Prompt ───
+const AI_SYSTEM_PROMPT = `Sei un esperto di AI conversazionale di Ellysse. Il tuo compito è analizzare la descrizione di uno scenario commerciale scritta in linguaggio naturale e trasformarla in uno o più scenari strutturati per il simulatore costi AI.
+
+CONTESTO TECNICO:
+- ASR (Speech-to-Text): Google STT. Modelli: "google_asr_standard" ($0.024/min), "google_asr_enhanced" ($0.036/min)
+- TTS (Text-to-Speech): Google o ElevenLabs. Modelli: "google_tts_standard", "google_tts_wavenet", "google_tts_neural2", "google_tts_studio" (Chirp 3), "elevenlabs_flash_25", "elevenlabs_multi_v1", "elevenlabs_multi_v2"
+- LLM: "gemini_flash" (Gemini 2.5 Flash), "gpt41" (GPT-4.1)
+
+PARAMETRI PER OGNI SCENARIO:
+- label: nome descrittivo dello scenario (es. "Bassa stagione — WaveNet — Prudente")
+- conversations: numero TOTALE di conversazioni in questo scenario
+- avgDurationSec: durata media conversazione in secondi (default 90, 0 per chatbot)
+- turnsPerConv: numero medio di turni bot per conversazione (default 3)
+- asrModel: chiave del modello ASR (default "google_asr_standard")
+- ttsModel: chiave del modello TTS
+- llmModel: chiave del modello LLM (default "gemini_flash")
+- avgInputTokens: token input medi per turno (default 300)
+- avgOutputTokens: token output medi per turno (default 150)
+- avgTtsChars: caratteri medi per risposta TTS (default 200, circa 30 parole)
+- pctWithTts: percentuale conversazioni con TTS (default 100 per voicebot, 0 per chatbot)
+- note: breve nota sul perché di questo scenario
+
+REGOLE IMPORTANTI:
+1. Se l'utente menziona scenari multipli (prudente/ottimista, bassa/alta stagione), crea scenari SEPARATI per ciascuna combinazione.
+2. Se l'utente menziona comparazioni TTS (es. WaveNet vs Chirp 3), duplica gli scenari per ogni modello TTS.
+3. Se l'utente menziona sotto-divisioni (parchi, sedi, clienti), crea scenari per ogni sotto-divisione.
+4. Il campo "conversations" deve essere il TOTALE per quel sotto-scenario, non un valore mensile (a meno che l'utente non specifichi esplicitamente "al mese"). Se l'utente parla di 60.000 chiamate in 7 mesi, conversations = 60000.
+5. Se l'utente non specifica durata, turni o token, usa i default ragionevoli sopra indicati.
+6. Se l'utente dice "il bot gestisce il 60% delle chiamate informative", calcola il numero assoluto e usalo come conversations — non inserire percentuali nei campi numerici.
+7. Aggiungi sempre un campo "period" (es. "7 mesi bassa stagione", "5 mesi alta stagione", "12 mesi") per chiarire il periodo coperto.
+8. Se l'utente richiede la suddivisione per entità (parchi, sedi, ecc.), crea anche gli scenari aggregati.
+
+RISPONDI ESCLUSIVAMENTE con un JSON valido in questo formato, senza testo prima o dopo:
+{
+  "summary": "Breve riepilogo di cosa hai capito dalla richiesta (2-3 frasi in italiano)",
+  "scenarios": [
+    {
+      "label": "...",
+      "period": "...",
+      "conversations": 60000,
+      "avgDurationSec": 90,
+      "turnsPerConv": 3,
+      "asrModel": "google_asr_standard",
+      "ttsModel": "google_tts_wavenet",
+      "llmModel": "gemini_flash",
+      "avgInputTokens": 300,
+      "avgOutputTokens": 150,
+      "avgTtsChars": 200,
+      "pctWithTts": 100,
+      "note": "..."
+    }
+  ]
+}`;
+
+// ─── AI Assistant Component ───
+function AiAssistant({ prices, markup, onLoadScenario }) {
+  const [apiKey, setApiKey] = useState(() => {
+    try { return window.localStorage.getItem("ellysse_ai_key") || ""; } catch { return ""; }
+  });
+  const [keyVisible, setKeyVisible] = useState(false);
+  const [prompt, setPrompt] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [aiResult, setAiResult] = useState(null);
+  const [error, setError] = useState("");
+  const resultRef = useRef(null);
+
+  // persist key
+  useEffect(() => {
+    try { if (apiKey) window.localStorage.setItem("ellysse_ai_key", apiKey); } catch {}
+  }, [apiKey]);
+
+  const analyze = async () => {
+    if (!prompt.trim() || !apiKey.trim()) return;
+    setLoading(true);
+    setError("");
+    setAiResult(null);
+
+    try {
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey.trim()}`,
+        },
+        body: JSON.stringify({
+          model: "google/gemini-2.5-flash",
+          messages: [
+            { role: "system", content: AI_SYSTEM_PROMPT },
+            { role: "user", content: prompt },
+          ],
+          max_tokens: 8000,
+          temperature: 0.1,
+        }),
+      });
+
+      const data = await res.json();
+      const content = data.choices?.[0]?.message?.content;
+
+      if (!content) {
+        setError(data.error?.message || "Nessuna risposta dal modello.");
+        setLoading(false);
+        return;
+      }
+
+      // Extract JSON from response (handle markdown code blocks)
+      let jsonStr = content;
+      const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (jsonMatch) jsonStr = jsonMatch[1];
+      // Also try to find raw JSON object
+      const braceMatch = jsonStr.match(/\{[\s\S]*\}/);
+      if (braceMatch) jsonStr = braceMatch[0];
+
+      const parsed = JSON.parse(jsonStr);
+
+      if (!parsed.scenarios || !Array.isArray(parsed.scenarios)) {
+        setError("L'AI non ha prodotto scenari validi. Riprova con una descrizione più dettagliata.");
+        setLoading(false);
+        return;
+      }
+
+      // Calculate costs for each scenario
+      const withCosts = parsed.scenarios.map((s) => ({
+        ...s,
+        results: calcCosts(
+          {
+            conversations: s.conversations || 0,
+            avgDurationSec: s.avgDurationSec ?? 90,
+            turnsPerConv: s.turnsPerConv ?? 3,
+            asrModel: s.asrModel || "google_asr_standard",
+            ttsModel: s.ttsModel || "google_tts_wavenet",
+            llmModel: s.llmModel || "gemini_flash",
+            avgInputTokens: s.avgInputTokens ?? 300,
+            avgOutputTokens: s.avgOutputTokens ?? 150,
+            avgTtsChars: s.avgTtsChars ?? 200,
+            pctWithTts: s.pctWithTts ?? 100,
+          },
+          prices
+        ),
+      }));
+
+      // Calculate grand totals
+      const grandTotal = withCosts.reduce((acc, s) => acc + s.results.totalCost, 0);
+
+      setAiResult({ summary: parsed.summary, scenarios: withCosts, grandTotal });
+      setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 200);
+    } catch (err) {
+      if (err instanceof SyntaxError) {
+        setError("L'AI ha risposto in un formato non valido. Riprova.");
+      } else {
+        setError(`Errore: ${err.message}`);
+      }
+    }
+    setLoading(false);
+  };
+
+  const examplePrompts = [
+    "45.000 chiamate/mese, 35% informative in bassa stagione (7 mesi), 90% in alta (5 mesi). Bot gestisce il 60% in autonomia. Confronta WaveNet vs Chirp 3.",
+    "10.000 conversazioni/mese con voicebot, durata media 2 minuti, 3 turni. Confronta Gemini Flash vs GPT-4.1 con ElevenLabs Flash.",
+    "Chatbot testuale WhatsApp, 20.000 messaggi/mese, 5 turni per conversazione. Solo Gemini Flash.",
+  ];
+
+  return (
+    <div className="ai-assistant">
+      <div className="ai-assistant-header">
+        <div className="ai-assistant-icon">✦</div>
+        <div>
+          <div className="ai-assistant-title">Assistente AI</div>
+          <div className="ai-assistant-subtitle">Descrivi lo scenario in linguaggio naturale — l'AI compilerà tutto per te</div>
+        </div>
+      </div>
+
+      {/* API Key */}
+      <div className="ai-key-row">
+        <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
+          <div className="form-label" style={{ fontSize: "11px" }}>API Key OpenRouter</div>
+          <div style={{ display: "flex", gap: "6px" }}>
+            <input
+              className="form-input"
+              type={keyVisible ? "text" : "password"}
+              placeholder="sk-or-..."
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              style={{ fontSize: "12px" }}
+            />
+            <button
+              className="btn-outline"
+              style={{ padding: "6px 10px", fontSize: "11px", flexShrink: 0 }}
+              onClick={() => setKeyVisible(!keyVisible)}
+            >
+              {keyVisible ? "Nascondi" : "Mostra"}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Textarea */}
+      <div className="form-group" style={{ marginBottom: "10px" }}>
+        <div className="form-label">Descrivi lo scenario</div>
+        <textarea
+          className="ai-textarea"
+          rows={6}
+          placeholder={"Incolla qui la descrizione dello scenario commerciale...\n\nEsempio: 45.000 chiamate/mese, 35% informative in bassa stagione (7 mesi), 90% in alta stagione (5 mesi). Il bot gestisce il 60% in autonomia (scenario prudente) o 70% (ottimista). Confronta WaveNet vs Chirp 3. Suddividi per parco: Cattolica 103.457, Cway 182.922, ..."}
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          disabled={loading}
+        />
+      </div>
+
+      {/* Example chips */}
+      {!prompt && (
+        <div className="ai-examples">
+          <span style={{ fontSize: "11px", color: "var(--text-light)", marginRight: "4px" }}>Esempi:</span>
+          {examplePrompts.map((ex, i) => (
+            <button key={i} className="ai-example-chip" onClick={() => setPrompt(ex)}>
+              {ex.slice(0, 60)}…
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Analyze button */}
+      <div style={{ display: "flex", gap: "8px", alignItems: "center", marginTop: "10px" }}>
+        <button
+          className="btn-primary ai-analyze-btn"
+          onClick={analyze}
+          disabled={loading || !prompt.trim() || !apiKey.trim()}
+          style={{ opacity: loading || !prompt.trim() || !apiKey.trim() ? 0.5 : 1 }}
+        >
+          {loading ? (
+            <span className="ai-spinner">Analizzo lo scenario…</span>
+          ) : (
+            <>✦ Analizza con AI</>
+          )}
+        </button>
+        {aiResult && (
+          <button className="btn-outline" style={{ fontSize: "12px", padding: "8px 14px" }} onClick={() => { setAiResult(null); setPrompt(""); }}>
+            ↺ Nuova analisi
+          </button>
+        )}
+      </div>
+
+      {/* Error */}
+      {error && <div className="ai-error">{error}</div>}
+
+      {/* Results */}
+      {aiResult && (
+        <div className="ai-results" ref={resultRef}>
+          {/* Summary */}
+          <div className="ai-summary">
+            <div className="ai-summary-label">Interpretazione AI</div>
+            <div className="ai-summary-text">{aiResult.summary}</div>
+          </div>
+
+          {/* Grand total */}
+          <div className="ai-grand-total">
+            <div>
+              <div style={{ fontSize: "12px", color: "var(--text-mid)", marginBottom: "2px" }}>Costo API totale — tutti gli scenari</div>
+              <div style={{ fontSize: "28px", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: "var(--navy)" }}>
+                {fmtEur(aiResult.grandTotal)}
+              </div>
+              {markup > 0 && (
+                <div style={{ fontSize: "14px", color: "var(--orange)", fontFamily: "'JetBrains Mono', monospace", marginTop: "2px" }}>
+                  Vendita: {fmtEur(aiResult.grandTotal * (1 + markup / 100))} (+{markup}%)
+                </div>
+              )}
+            </div>
+            <div style={{ fontSize: "12px", color: "var(--text-light)" }}>
+              {aiResult.scenarios.length} scenari generati
+            </div>
+          </div>
+
+          {/* Scenario cards */}
+          <div className="ai-scenarios-grid">
+            {aiResult.scenarios.map((s, i) => {
+              const sellingPrice = s.results.totalCost * (1 + markup / 100);
+              return (
+                <div key={i} className="ai-scenario-card">
+                  <div className="ai-scenario-header">
+                    <div>
+                      <div className="ai-scenario-label">{s.label}</div>
+                      {s.period && <div className="ai-scenario-period">{s.period}</div>}
+                    </div>
+                    <button
+                      className="btn-card-edit"
+                      title="Carica nei campi della simulazione dettagliata"
+                      onClick={() => onLoadScenario && onLoadScenario({
+                        conversations: s.conversations,
+                        avgDurationSec: s.avgDurationSec ?? 90,
+                        turnsPerConv: s.turnsPerConv ?? 3,
+                        asrModel: s.asrModel || "google_asr_standard",
+                        ttsModel: s.ttsModel || "google_tts_wavenet",
+                        llmModel: s.llmModel || "gemini_flash",
+                        avgInputTokens: s.avgInputTokens ?? 300,
+                        avgOutputTokens: s.avgOutputTokens ?? 150,
+                        avgTtsChars: s.avgTtsChars ?? 200,
+                        pctWithTts: s.pctWithTts ?? 100,
+                      })}
+                    >
+                      ↓ Carica nel form
+                    </button>
+                  </div>
+
+                  {/* Costs */}
+                  <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginBottom: "2px" }}>
+                    <span style={{ fontSize: "22px", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: "var(--navy)" }}>
+                      {fmtEur(s.results.totalCost)}
+                    </span>
+                    <span style={{ fontSize: "11px", color: "var(--text-light)" }}>costo API</span>
+                  </div>
+                  {markup > 0 && (
+                    <div style={{ fontSize: "13px", color: "var(--orange)", fontFamily: "'JetBrains Mono', monospace", marginBottom: "6px" }}>
+                      Vendita: {fmtEur(sellingPrice)}
+                    </div>
+                  )}
+
+                  <div style={{ fontSize: "12px", color: "var(--text-mid)", marginBottom: "8px" }}>
+                    {fmtInt(s.conversations)} conv. &middot; {fmtEur(s.results.costPerConv)}/conv
+                  </div>
+
+                  <BreakdownBar asr={s.results.asrCost} tts={s.results.ttsCost} llm={s.results.llmCost} total={s.results.totalCost} />
+
+                  {/* Details */}
+                  <div className="detail-row" style={{ fontSize: "12px" }}>
+                    <span className="detail-label">ASR</span>
+                    <span className="detail-value" style={{ fontSize: "12px" }}>{fmtEur(s.results.asrCost)}</span>
+                  </div>
+                  <div className="detail-row" style={{ fontSize: "12px" }}>
+                    <span className="detail-label">TTS ({TTS_MODELS[s.ttsModel] || s.ttsModel})</span>
+                    <span className="detail-value" style={{ fontSize: "12px" }}>{fmtEur(s.results.ttsCost)}</span>
+                  </div>
+                  <div className="detail-row" style={{ fontSize: "12px" }}>
+                    <span className="detail-label">LLM ({LLM_MODELS[s.llmModel] || s.llmModel})</span>
+                    <span className="detail-value" style={{ fontSize: "12px" }}>{fmtEur(s.results.llmCost)}</span>
+                  </div>
+
+                  {/* Note */}
+                  {s.note && (
+                    <div className="ai-scenario-note">{s.note}</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Print */}
+          <div className="print-btn-row no-print" style={{ marginTop: "1rem" }}>
+            <button className="btn-print" onClick={() => window.print()}>
+              ⎙&nbsp; Esporta / Stampa PDF
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Advanced Mode ───
 function AdvancedMode({ prices, markup }) {
   const [config, setConfig] = useState({
@@ -500,16 +856,33 @@ function AdvancedMode({ prices, markup }) {
     avgInputTokens: 300, avgOutputTokens: 150, avgTtsChars: 120, pctWithTts: 100,
   });
 
+  const [loadedLabel, setLoadedLabel] = useState("");
+  const formRef = useRef(null);
+
   const update = useCallback((key, val) => {
     setConfig((prev) => ({ ...prev, [key]: val }));
+  }, []);
+
+  const handleLoadScenario = useCallback((scenario) => {
+    setConfig(scenario);
+    setLoadedLabel(scenario.label || "Scenario AI");
+    setTimeout(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 200);
   }, []);
 
   const results = useMemo(() => calcCosts(config, prices), [config, prices]);
 
   return (
     <>
-      <div className="section">
-        <div className="section-title">Parametri conversazione</div>
+      {/* AI Assistant */}
+      <AiAssistant prices={prices} markup={markup} onLoadScenario={handleLoadScenario} />
+
+      <div className="divider" />
+
+      <div className="section" ref={formRef}>
+        <div className="section-title">
+          Parametri conversazione
+          {loadedLabel && <span style={{ fontSize: "12px", fontWeight: 400, color: "var(--orange)", marginLeft: "10px" }}>← caricato da: {loadedLabel}</span>}
+        </div>
         <div className="section-desc">Configura ogni dettaglio per una stima precisa, utile per capitolati tecnici e preventivi dettagliati.</div>
 
         <div className="grid-2" style={{ marginBottom: "1rem" }}>
