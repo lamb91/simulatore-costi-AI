@@ -535,22 +535,47 @@ PARAMETRI PER OGNI SCENARIO:
 - note: breve nota sul perché di questo scenario
 
 REGOLE IMPORTANTI:
+
+=== REGOLA CRITICA: FILTRAGGIO VOLUMI ===
+Quando l'utente fornisce volumi grezzi (es. "45.000 chiamate/mese totali") e poi specifica filtri (es. "35% informative", "il bot gestisce il 60%"), DEVI applicare TUTTI i filtri in cascata per ottenere il numero di conversazioni effettivamente gestite dall'AI.
+
+Esempio di calcolo corretto:
+- 45.000 chiamate/mese totali
+- 35% informative in bassa stagione = 15.750 informative/mese
+- Bot gestisce il 60% = 9.450 gestite da AI/mese
+- Per 7 mesi = 66.150 conversazioni AI in bassa stagione
+- L'utente arrotonda a 60.000? Usa il valore indicato dall'utente.
+
+Lo stesso vale per le sotto-divisioni (parchi, sedi, clienti): se l'utente fornisce il volume TOTALE annuale di un parco (es. "Oltremare 107.440"), quel numero rappresenta le chiamate totali grezze del parco, NON le conversazioni gestite da AI. Devi applicare gli stessi filtri (% informative × % automazione bot) anche a quei numeri, proporzionalmente.
+
+Calcolo per sotto-divisione: il peso di ogni sotto-entità rispetto al totale è dato dal rapporto tra il suo volume e la somma di tutti i volumi. Usa quel peso per ripartire le conversazioni AI già calcolate a livello aggregato.
+Esempio: se il totale annuale grezzo dei parchi è 543.746 e Oltremare ha 107.440 (19.75%), e le conversazioni AI totali annuali (scenario prudente) sono 160.000, allora Oltremare gestisce 160.000 × 19.75% = 31.600 conversazioni AI.
+
+=== REGOLA ANTI-DOPPIO-CONTEGGIO ===
+Gli scenari aggregati (totale annuale) e quelli per sotto-divisione (per parco/sede) rappresentano LO STESSO volume visto da prospettive diverse. NON devono essere sommati tra loro.
+Per evitare confusione, usa il campo "group" per raggruppare gli scenari:
+- group: "aggregato" per gli scenari totali (bassa stagione + alta stagione + totale annuale)
+- group: "per_entita" per gli scenari suddivisi per parco/sede/cliente
+Nella risposta JSON, aggiungi anche un campo "groups_note" nel summary che spiega: "Gli scenari 'per_entita' sono una suddivisione degli scenari 'aggregato'. I due gruppi NON vanno sommati."
+
+=== ALTRE REGOLE ===
 1. Se l'utente menziona scenari multipli (prudente/ottimista, bassa/alta stagione), crea scenari SEPARATI per ciascuna combinazione.
 2. Se l'utente menziona comparazioni TTS (es. WaveNet vs Chirp 3), duplica gli scenari per ogni modello TTS.
-3. Se l'utente menziona sotto-divisioni (parchi, sedi, clienti), crea scenari per ogni sotto-divisione.
-4. Il campo "conversations" deve essere il TOTALE per quel sotto-scenario. Se l'utente parla di 60.000 chiamate in 7 mesi, conversations = 60000 e periodMonths = 7. Se dice "10.000 al mese", conversations = 10000 e periodMonths = 1.
-5. Se l'utente non specifica durata, turni o token, usa i default ragionevoli sopra indicati.
-6. Se l'utente dice "il bot gestisce il 60% delle chiamate informative", calcola il numero assoluto e usalo come conversations — non inserire percentuali nei campi numerici.
+3. Se l'utente menziona sotto-divisioni (parchi, sedi, clienti), crea scenari per ogni sotto-divisione applicando il filtro proporzionale come descritto sopra.
+4. Il campo "conversations" deve essere il numero di conversazioni EFFETTIVAMENTE GESTITE DALL'AI dopo tutti i filtri, NON il volume grezzo.
+5. Se l'utente parla di "60.000 chiamate in 7 mesi gestite dall'AI", conversations = 60000 e periodMonths = 7. Se dice "10.000 al mese", conversations = 10000 e periodMonths = 1.
+6. Se l'utente non specifica durata, turni o token, usa i default ragionevoli sopra indicati.
 7. Aggiungi sempre un campo "period" (es. "7 mesi bassa stagione", "5 mesi alta stagione", "12 mesi") per chiarire il periodo coperto.
-8. Se l'utente richiede la suddivisione per entità (parchi, sedi, ecc.), crea anche gli scenari aggregati.
+8. Per le sotto-divisioni, gli scenari per entità devono coprire lo stesso arco temporale (12 mesi) e la somma delle loro conversazioni deve corrispondere al totale annuale dello scenario corrispondente.
 
 RISPONDI ESCLUSIVAMENTE con un JSON valido in questo formato, senza testo prima o dopo:
 {
-  "summary": "Breve riepilogo di cosa hai capito dalla richiesta (2-3 frasi in italiano)",
+  "summary": "Breve riepilogo di cosa hai capito dalla richiesta (2-3 frasi in italiano). Se ci sono sotto-divisioni, SPECIFICA che gli scenari per entità sono una ripartizione del totale e NON vanno sommati agli aggregati.",
   "scenarios": [
     {
-      "label": "...",
-      "period": "...",
+      "group": "aggregato",
+      "label": "Bassa stagione - Prudente - WaveNet",
+      "period": "7 mesi bassa stagione",
       "periodMonths": 7,
       "conversations": 60000,
       "avgDurationSec": 90,
@@ -562,7 +587,24 @@ RISPONDI ESCLUSIVAMENTE con un JSON valido in questo formato, senza testo prima 
       "avgOutputTokens": 150,
       "avgTtsChars": 200,
       "pctWithTts": 100,
-      "note": "..."
+      "note": "60.000 conv. = 100.000 informative × 60% automazione"
+    },
+    {
+      "group": "per_entita",
+      "label": "Oltremare - Annuale Prudente - WaveNet",
+      "period": "12 mesi",
+      "periodMonths": 12,
+      "conversations": 31600,
+      "avgDurationSec": 90,
+      "turnsPerConv": 3,
+      "asrModel": "google_asr_standard",
+      "ttsModel": "google_tts_wavenet",
+      "llmModel": "gemini_flash",
+      "avgInputTokens": 300,
+      "avgOutputTokens": 150,
+      "avgTtsChars": 200,
+      "pctWithTts": 100,
+      "note": "19.75% del totale 160.000 (peso: 107.440/543.746)"
     }
   ]
 }`;
@@ -651,16 +693,32 @@ function AiAssistant({ prices, markup, onLoadScenario }) {
         return { ...s, _config: cfg, results: calcCosts(cfg, prices) };
       });
 
-      // Calculate grand totals and annualized cost
-      const grandTotal = withCosts.reduce((acc, s) => acc + s.results.totalCost, 0);
-      // Estimate annualized: sum monthly costs of each scenario × 12
-      // But scenarios may cover different periods, so we just sum totals
-      const grandTotalMonthly = withCosts.reduce((acc, s) => {
+      // Detect groups for anti-double-counting
+      const groups = {};
+      withCosts.forEach((s) => {
+        const g = s.group || "aggregato";
+        if (!groups[g]) groups[g] = [];
+        groups[g].push(s);
+      });
+      const hasMultipleGroups = Object.keys(groups).length > 1;
+      const groupTotals = {};
+      for (const [g, scenarios] of Object.entries(groups)) {
+        const total = scenarios.reduce((acc, s) => acc + s.results.totalCost, 0);
+        const monthly = scenarios.reduce((acc, s) => {
+          const pm = s._config.periodMonths || 1;
+          return acc + s.results.totalCost / pm;
+        }, 0);
+        groupTotals[g] = { total, monthly, count: scenarios.length };
+      }
+      // Grand total uses only "aggregato" group to avoid double-counting
+      const primaryGroup = groups["aggregato"] || Object.values(groups)[0] || [];
+      const grandTotal = primaryGroup.reduce((acc, s) => acc + s.results.totalCost, 0);
+      const grandTotalMonthly = primaryGroup.reduce((acc, s) => {
         const pm = s._config.periodMonths || 1;
         return acc + s.results.totalCost / pm;
       }, 0);
 
-      setAiResult({ summary: parsed.summary, scenarios: withCosts, grandTotal, grandTotalMonthly });
+      setAiResult({ summary: parsed.summary, scenarios: withCosts, groups, groupTotals, hasMultipleGroups, grandTotal, grandTotalMonthly });
       setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 200);
     } catch (err) {
       if (err instanceof SyntaxError) {
@@ -773,7 +831,11 @@ function AiAssistant({ prices, markup, onLoadScenario }) {
           {/* Grand total */}
           <div className="ai-grand-total">
             <div>
-              <div style={{ fontSize: "12px", color: "var(--text-mid)", marginBottom: "2px" }}>Costo API totale — somma di tutti gli scenari</div>
+              <div style={{ fontSize: "12px", color: "var(--text-mid)", marginBottom: "2px" }}>
+                {aiResult.hasMultipleGroups
+                  ? "Costo API totale — solo scenari aggregati (no dettaglio per entità)"
+                  : "Costo API totale — somma di tutti gli scenari"}
+              </div>
               <div style={{ fontSize: "28px", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: "var(--navy)" }}>
                 {fmtEur(aiResult.grandTotal)}
               </div>
@@ -791,7 +853,116 @@ function AiAssistant({ prices, markup, onLoadScenario }) {
             </div>
           </div>
 
-          {/* Scenario cards */}
+          {/* Anti-double-counting warning */}
+          {aiResult.hasMultipleGroups && (
+            <div style={{
+              background: "linear-gradient(135deg, #fff8e1 0%, #fff3cd 100%)",
+              border: "1px solid #ffc107",
+              borderRadius: "8px",
+              padding: "12px 16px",
+              marginBottom: "16px",
+              fontSize: "12px",
+              lineHeight: 1.5,
+              color: "#856404",
+            }}>
+              <strong>⚠ Attenzione — Gruppi multipli rilevati</strong><br/>
+              Gli scenari "per entità" (dettaglio per parco/sede) rappresentano una <strong>suddivisione proporzionale</strong> del totale aggregato,
+              NON costi aggiuntivi. Il totale sopra considera solo gli scenari aggregati.
+              {aiResult.groupTotals && Object.entries(aiResult.groupTotals).map(([g, gt]) => (
+                <div key={g} style={{ marginTop: "6px" }}>
+                  <span style={{ fontWeight: 600, textTransform: "capitalize" }}>{g.replace("_", " ")}:</span>{" "}
+                  {fmtEur(gt.total)} ({gt.count} scenari)
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Scenario cards — grouped */}
+          {aiResult.hasMultipleGroups ? (
+            Object.entries(aiResult.groups).map(([groupName, groupScenarios]) => (
+              <div key={groupName} style={{ marginBottom: "24px" }}>
+                <div style={{
+                  fontSize: "13px",
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.05em",
+                  color: groupName === "aggregato" ? "var(--navy)" : "var(--text-mid)",
+                  borderBottom: groupName === "aggregato" ? "2px solid var(--navy)" : "1px solid var(--border)",
+                  paddingBottom: "6px",
+                  marginBottom: "12px",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "baseline",
+                }}>
+                  <span>{groupName === "aggregato" ? "📊 Scenari Aggregati (usati per il totale)" : `📋 Dettaglio: ${groupName.replace("_", " ")}`}</span>
+                  <span style={{ fontSize: "11px", fontWeight: 400, color: "var(--text-light)" }}>
+                    {fmtEur(aiResult.groupTotals[groupName]?.total || 0)}
+                  </span>
+                </div>
+                <div className="ai-scenarios-grid">
+                  {groupScenarios.map((s, i) => {
+                    const sellingPrice = s.results.totalCost * (1 + markup / 100);
+                    const pm = s._config?.periodMonths || s.periodMonths || 1;
+                    const monthlyCost = pm > 0 ? s.results.totalCost / pm : s.results.totalCost;
+                    const periodLabel = pm === 1 ? "/ mese" : `/ ${pm} mesi`;
+                    return (
+                      <div key={i} className="ai-scenario-card" style={groupName !== "aggregato" ? { opacity: 0.85, borderLeftColor: "var(--text-light)" } : {}}>
+                        <div className="ai-scenario-header">
+                          <div>
+                            <div className="ai-scenario-label">{s.label}</div>
+                            {s.period && <div className="ai-scenario-period">{s.period}</div>}
+                          </div>
+                          <button
+                            className="btn-card-edit"
+                            title="Carica nei campi della simulazione dettagliata"
+                            onClick={() => onLoadScenario && onLoadScenario({
+                              conversations: s.conversations, avgDurationSec: s.avgDurationSec ?? 90, turnsPerConv: s.turnsPerConv ?? 3,
+                              asrModel: s.asrModel || "google_asr_standard", ttsModel: s.ttsModel || "google_tts_wavenet", llmModel: s.llmModel || "gemini_flash",
+                              avgInputTokens: s.avgInputTokens ?? 300, avgOutputTokens: s.avgOutputTokens ?? 150, avgTtsChars: s.avgTtsChars ?? 200,
+                              pctWithTts: s.pctWithTts ?? 100, periodMonths: pm, label: s.label,
+                            })}
+                          >↓ Carica nel form</button>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginBottom: "2px" }}>
+                          <span style={{ fontSize: "22px", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: "var(--navy)" }}>
+                            {fmtEur(s.results.totalCost)}
+                          </span>
+                          <span style={{ fontSize: "11px", color: "var(--text-light)" }}>costo API {periodLabel}</span>
+                        </div>
+                        {pm > 1 && (
+                          <div style={{ fontSize: "12px", color: "var(--text-mid)", fontFamily: "'JetBrains Mono', monospace", marginBottom: "2px" }}>
+                            {fmtEur(monthlyCost)} / mese
+                          </div>
+                        )}
+                        {markup > 0 && (
+                          <div style={{ fontSize: "13px", color: "var(--orange)", fontFamily: "'JetBrains Mono', monospace", marginBottom: "6px" }}>
+                            Vendita: {fmtEur(sellingPrice)} {periodLabel}
+                          </div>
+                        )}
+                        <div style={{ fontSize: "12px", color: "var(--text-mid)", marginBottom: "8px" }}>
+                          {fmtInt(s.conversations)} conv. in {pm} {pm === 1 ? "mese" : "mesi"} &middot; {fmtEur(s.results.costPerConv)}/conv
+                        </div>
+                        <BreakdownBar asr={s.results.asrCost} tts={s.results.ttsCost} llm={s.results.llmCost} total={s.results.totalCost} />
+                        <div className="detail-row" style={{ fontSize: "12px" }}>
+                          <span className="detail-label">ASR</span>
+                          <span className="detail-value" style={{ fontSize: "12px" }}>{fmtEur(s.results.asrCost)}</span>
+                        </div>
+                        <div className="detail-row" style={{ fontSize: "12px" }}>
+                          <span className="detail-label">TTS ({TTS_MODELS[s.ttsModel] || s.ttsModel})</span>
+                          <span className="detail-value" style={{ fontSize: "12px" }}>{fmtEur(s.results.ttsCost)}</span>
+                        </div>
+                        <div className="detail-row" style={{ fontSize: "12px" }}>
+                          <span className="detail-label">LLM ({LLM_MODELS[s.llmModel] || s.llmModel})</span>
+                          <span className="detail-value" style={{ fontSize: "12px" }}>{fmtEur(s.results.llmCost)}</span>
+                        </div>
+                        {s.note && <div className="ai-scenario-note">{s.note}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))
+          ) : (
           <div className="ai-scenarios-grid">
             {aiResult.scenarios.map((s, i) => {
               const sellingPrice = s.results.totalCost * (1 + markup / 100);
@@ -873,6 +1044,7 @@ function AiAssistant({ prices, markup, onLoadScenario }) {
               );
             })}
           </div>
+          )}
 
           {/* Print */}
           <div className="print-btn-row no-print" style={{ marginTop: "1rem" }}>
