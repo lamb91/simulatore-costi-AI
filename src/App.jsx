@@ -6,6 +6,17 @@ const fmt = (n) => (typeof n === "number" ? n.toLocaleString("it-IT", { minimumF
 const fmtInt = (n) => (typeof n === "number" ? n.toLocaleString("it-IT") : n);
 const fmtEur = (n) => `€ ${fmt(n)}`;
 
+// ─── Period options ───
+const PERIOD_OPTIONS = [
+  { value: 1, label: "al mese" },
+  { value: 3, label: "3 mesi (trimestre)" },
+  { value: 5, label: "5 mesi" },
+  { value: 6, label: "6 mesi (semestre)" },
+  { value: 7, label: "7 mesi" },
+  { value: 12, label: "12 mesi (anno)" },
+  { value: 0, label: "Personalizzato..." },
+];
+
 // ─── Color constants ───
 const COLORS = {
   asr: "#083866",
@@ -225,6 +236,10 @@ function ResultPanel({ results, config, markup }) {
     totalAsrMinutes, totalTtsChars, totalInputTokens, totalOutputTokens,
   } = results;
 
+  const periodMonths = config.periodMonths || 1;
+  const periodLabel = periodMonths === 1 ? "/ mese" : `/ ${periodMonths} mesi`;
+  const monthlyCost = periodMonths > 0 ? totalCost / periodMonths : totalCost;
+
   const hasMarkup = markup > 0;
   const sellingPrice = totalCost * (1 + markup / 100);
   const sellingPricePerConv = config.conversations > 0 ? sellingPrice / config.conversations : 0;
@@ -236,11 +251,14 @@ function ResultPanel({ results, config, markup }) {
       {/* API Cost */}
       <div style={{ display: "flex", alignItems: "baseline", gap: "12px", marginBottom: "4px" }}>
         <div className="result-total">{fmtEur(totalCost)}</div>
-        <span style={{ fontSize: "14px", color: "var(--text-mid)" }}>costo API / mese</span>
+        <span style={{ fontSize: "14px", color: "var(--text-mid)" }}>costo API {periodLabel}</span>
       </div>
       <div className="result-sub">
         Costo per conversazione: <strong className="mono">{fmtEur(costPerConv)}</strong>
         &nbsp;&middot;&nbsp;{fmtInt(config.conversations)} conversazioni
+        {periodMonths > 1 && (
+          <>&nbsp;&middot;&nbsp;<strong className="mono">{fmtEur(monthlyCost)}</strong> / mese</>
+        )}
       </div>
 
       {/* Selling price */}
@@ -248,7 +266,7 @@ function ResultPanel({ results, config, markup }) {
         <div className="selling-price-block">
           <div style={{ display: "flex", alignItems: "baseline", gap: "10px" }}>
             <div className="selling-price-total">{fmtEur(sellingPrice)}</div>
-            <span className="selling-price-label">prezzo di vendita / mese</span>
+            <span className="selling-price-label">prezzo di vendita {periodLabel}</span>
           </div>
           <div className="selling-price-sub">
             <span>{fmtEur(sellingPricePerConv)} / conversazione</span>
@@ -283,22 +301,23 @@ function ResultPanel({ results, config, markup }) {
 
       <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--navy)", marginBottom: "8px" }}>
         {hasMarkup ? "Stime estese — prezzo di vendita" : "Stime estese"}
+        {periodMonths > 1 && <span style={{ fontWeight: 400, fontSize: "12px", color: "var(--text-light)", marginLeft: "8px" }}>(calcolate dal costo mensile: {fmtEur(hasMarkup ? monthlyCost * (1 + markup / 100) : monthlyCost)})</span>}
       </div>
       <div className="grid-3" style={{ marginBottom: "1rem" }}>
         <Metric
-          label="Trimestrale"
-          value={fmtEur((hasMarkup ? sellingPrice : totalCost) * 3)}
-          sub={hasMarkup ? `Costo: ${fmtEur(totalCost * 3)}` : "3 mesi"}
+          label="Mensile"
+          value={fmtEur(hasMarkup ? monthlyCost * (1 + markup / 100) : monthlyCost)}
+          sub={hasMarkup ? `Costo: ${fmtEur(monthlyCost)}` : "1 mese"}
         />
         <Metric
           label="Semestrale"
-          value={fmtEur((hasMarkup ? sellingPrice : totalCost) * 6)}
-          sub={hasMarkup ? `Costo: ${fmtEur(totalCost * 6)}` : "6 mesi"}
+          value={fmtEur((hasMarkup ? monthlyCost * (1 + markup / 100) : monthlyCost) * 6)}
+          sub={hasMarkup ? `Costo: ${fmtEur(monthlyCost * 6)}` : "6 mesi"}
         />
         <Metric
           label="Annuale"
-          value={fmtEur((hasMarkup ? sellingPrice : totalCost) * 12)}
-          sub={hasMarkup ? `Costo: ${fmtEur(totalCost * 12)}` : "12 mesi"}
+          value={fmtEur((hasMarkup ? monthlyCost * (1 + markup / 100) : monthlyCost) * 12)}
+          sub={hasMarkup ? `Costo: ${fmtEur(monthlyCost * 12)}` : "12 mesi"}
           color="orange"
         />
       </div>
@@ -502,7 +521,8 @@ CONTESTO TECNICO:
 
 PARAMETRI PER OGNI SCENARIO:
 - label: nome descrittivo dello scenario (es. "Bassa stagione — WaveNet — Prudente")
-- conversations: numero TOTALE di conversazioni in questo scenario
+- periodMonths: numero di mesi coperti da questo scenario. CRUCIALE: se l'utente dice "60.000 chiamate in 7 mesi", periodMonths = 7 e conversations = 60000. Se dice "10.000 al mese", periodMonths = 1 e conversations = 10000.
+- conversations: numero TOTALE di conversazioni nel periodo indicato (NON mensile, a meno che periodMonths = 1)
 - avgDurationSec: durata media conversazione in secondi (default 90, 0 per chatbot)
 - turnsPerConv: numero medio di turni bot per conversazione (default 3)
 - asrModel: chiave del modello ASR (default "google_asr_standard")
@@ -518,7 +538,7 @@ REGOLE IMPORTANTI:
 1. Se l'utente menziona scenari multipli (prudente/ottimista, bassa/alta stagione), crea scenari SEPARATI per ciascuna combinazione.
 2. Se l'utente menziona comparazioni TTS (es. WaveNet vs Chirp 3), duplica gli scenari per ogni modello TTS.
 3. Se l'utente menziona sotto-divisioni (parchi, sedi, clienti), crea scenari per ogni sotto-divisione.
-4. Il campo "conversations" deve essere il TOTALE per quel sotto-scenario, non un valore mensile (a meno che l'utente non specifichi esplicitamente "al mese"). Se l'utente parla di 60.000 chiamate in 7 mesi, conversations = 60000.
+4. Il campo "conversations" deve essere il TOTALE per quel sotto-scenario. Se l'utente parla di 60.000 chiamate in 7 mesi, conversations = 60000 e periodMonths = 7. Se dice "10.000 al mese", conversations = 10000 e periodMonths = 1.
 5. Se l'utente non specifica durata, turni o token, usa i default ragionevoli sopra indicati.
 6. Se l'utente dice "il bot gestisce il 60% delle chiamate informative", calcola il numero assoluto e usalo come conversations — non inserire percentuali nei campi numerici.
 7. Aggiungi sempre un campo "period" (es. "7 mesi bassa stagione", "5 mesi alta stagione", "12 mesi") per chiarire il periodo coperto.
@@ -531,6 +551,7 @@ RISPONDI ESCLUSIVAMENTE con un JSON valido in questo formato, senza testo prima 
     {
       "label": "...",
       "period": "...",
+      "periodMonths": 7,
       "conversations": 60000,
       "avgDurationSec": 90,
       "turnsPerConv": 3,
@@ -613,29 +634,33 @@ function AiAssistant({ prices, markup, onLoadScenario }) {
       }
 
       // Calculate costs for each scenario
-      const withCosts = parsed.scenarios.map((s) => ({
-        ...s,
-        results: calcCosts(
-          {
-            conversations: s.conversations || 0,
-            avgDurationSec: s.avgDurationSec ?? 90,
-            turnsPerConv: s.turnsPerConv ?? 3,
-            asrModel: s.asrModel || "google_asr_standard",
-            ttsModel: s.ttsModel || "google_tts_wavenet",
-            llmModel: s.llmModel || "gemini_flash",
-            avgInputTokens: s.avgInputTokens ?? 300,
-            avgOutputTokens: s.avgOutputTokens ?? 150,
-            avgTtsChars: s.avgTtsChars ?? 200,
-            pctWithTts: s.pctWithTts ?? 100,
-          },
-          prices
-        ),
-      }));
+      const withCosts = parsed.scenarios.map((s) => {
+        const cfg = {
+          conversations: s.conversations || 0,
+          avgDurationSec: s.avgDurationSec ?? 90,
+          turnsPerConv: s.turnsPerConv ?? 3,
+          asrModel: s.asrModel || "google_asr_standard",
+          ttsModel: s.ttsModel || "google_tts_wavenet",
+          llmModel: s.llmModel || "gemini_flash",
+          avgInputTokens: s.avgInputTokens ?? 300,
+          avgOutputTokens: s.avgOutputTokens ?? 150,
+          avgTtsChars: s.avgTtsChars ?? 200,
+          pctWithTts: s.pctWithTts ?? 100,
+          periodMonths: s.periodMonths ?? 1,
+        };
+        return { ...s, _config: cfg, results: calcCosts(cfg, prices) };
+      });
 
-      // Calculate grand totals
+      // Calculate grand totals and annualized cost
       const grandTotal = withCosts.reduce((acc, s) => acc + s.results.totalCost, 0);
+      // Estimate annualized: sum monthly costs of each scenario × 12
+      // But scenarios may cover different periods, so we just sum totals
+      const grandTotalMonthly = withCosts.reduce((acc, s) => {
+        const pm = s._config.periodMonths || 1;
+        return acc + s.results.totalCost / pm;
+      }, 0);
 
-      setAiResult({ summary: parsed.summary, scenarios: withCosts, grandTotal });
+      setAiResult({ summary: parsed.summary, scenarios: withCosts, grandTotal, grandTotalMonthly });
       setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 200);
     } catch (err) {
       if (err instanceof SyntaxError) {
@@ -748,7 +773,7 @@ function AiAssistant({ prices, markup, onLoadScenario }) {
           {/* Grand total */}
           <div className="ai-grand-total">
             <div>
-              <div style={{ fontSize: "12px", color: "var(--text-mid)", marginBottom: "2px" }}>Costo API totale — tutti gli scenari</div>
+              <div style={{ fontSize: "12px", color: "var(--text-mid)", marginBottom: "2px" }}>Costo API totale — somma di tutti gli scenari</div>
               <div style={{ fontSize: "28px", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: "var(--navy)" }}>
                 {fmtEur(aiResult.grandTotal)}
               </div>
@@ -757,6 +782,9 @@ function AiAssistant({ prices, markup, onLoadScenario }) {
                   Vendita: {fmtEur(aiResult.grandTotal * (1 + markup / 100))} (+{markup}%)
                 </div>
               )}
+              <div style={{ fontSize: "12px", color: "var(--text-light)", marginTop: "4px", fontFamily: "'JetBrains Mono', monospace" }}>
+                Media mensile stimata: {fmtEur(aiResult.grandTotalMonthly)} — Annualizzato: {fmtEur(aiResult.grandTotalMonthly * 12)}
+              </div>
             </div>
             <div style={{ fontSize: "12px", color: "var(--text-light)" }}>
               {aiResult.scenarios.length} scenari generati
@@ -767,6 +795,9 @@ function AiAssistant({ prices, markup, onLoadScenario }) {
           <div className="ai-scenarios-grid">
             {aiResult.scenarios.map((s, i) => {
               const sellingPrice = s.results.totalCost * (1 + markup / 100);
+              const pm = s._config?.periodMonths || s.periodMonths || 1;
+              const monthlyCost = pm > 0 ? s.results.totalCost / pm : s.results.totalCost;
+              const periodLabel = pm === 1 ? "/ mese" : `/ ${pm} mesi`;
               return (
                 <div key={i} className="ai-scenario-card">
                   <div className="ai-scenario-header">
@@ -788,6 +819,8 @@ function AiAssistant({ prices, markup, onLoadScenario }) {
                         avgOutputTokens: s.avgOutputTokens ?? 150,
                         avgTtsChars: s.avgTtsChars ?? 200,
                         pctWithTts: s.pctWithTts ?? 100,
+                        periodMonths: pm,
+                        label: s.label,
                       })}
                     >
                       ↓ Carica nel form
@@ -799,16 +832,21 @@ function AiAssistant({ prices, markup, onLoadScenario }) {
                     <span style={{ fontSize: "22px", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: "var(--navy)" }}>
                       {fmtEur(s.results.totalCost)}
                     </span>
-                    <span style={{ fontSize: "11px", color: "var(--text-light)" }}>costo API</span>
+                    <span style={{ fontSize: "11px", color: "var(--text-light)" }}>costo API {periodLabel}</span>
                   </div>
+                  {pm > 1 && (
+                    <div style={{ fontSize: "12px", color: "var(--text-mid)", fontFamily: "'JetBrains Mono', monospace", marginBottom: "2px" }}>
+                      {fmtEur(monthlyCost)} / mese
+                    </div>
+                  )}
                   {markup > 0 && (
                     <div style={{ fontSize: "13px", color: "var(--orange)", fontFamily: "'JetBrains Mono', monospace", marginBottom: "6px" }}>
-                      Vendita: {fmtEur(sellingPrice)}
+                      Vendita: {fmtEur(sellingPrice)} {periodLabel}
                     </div>
                   )}
 
                   <div style={{ fontSize: "12px", color: "var(--text-mid)", marginBottom: "8px" }}>
-                    {fmtInt(s.conversations)} conv. &middot; {fmtEur(s.results.costPerConv)}/conv
+                    {fmtInt(s.conversations)} conv. in {pm} {pm === 1 ? "mese" : "mesi"} &middot; {fmtEur(s.results.costPerConv)}/conv
                   </div>
 
                   <BreakdownBar asr={s.results.asrCost} tts={s.results.ttsCost} llm={s.results.llmCost} total={s.results.totalCost} />
@@ -854,8 +892,10 @@ function AdvancedMode({ prices, markup }) {
     conversations: 10000, avgDurationSec: 90, turnsPerConv: 3,
     asrModel: "google_asr_standard", ttsModel: "google_tts_wavenet", llmModel: "gemini_flash",
     avgInputTokens: 300, avgOutputTokens: 150, avgTtsChars: 120, pctWithTts: 100,
+    periodMonths: 1,
   });
 
+  const [customPeriod, setCustomPeriod] = useState(false);
   const [loadedLabel, setLoadedLabel] = useState("");
   const formRef = useRef(null);
 
@@ -864,8 +904,12 @@ function AdvancedMode({ prices, markup }) {
   }, []);
 
   const handleLoadScenario = useCallback((scenario) => {
-    setConfig(scenario);
-    setLoadedLabel(scenario.label || "Scenario AI");
+    const { label, ...cfg } = scenario;
+    setConfig((prev) => ({ ...prev, ...cfg }));
+    setLoadedLabel(label || "Scenario AI");
+    // If period is not in the preset options, switch to custom
+    const isPreset = PERIOD_OPTIONS.some((o) => o.value === cfg.periodMonths && o.value !== 0);
+    setCustomPeriod(!isPreset);
     setTimeout(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 200);
   }, []);
 
@@ -885,13 +929,46 @@ function AdvancedMode({ prices, markup }) {
         </div>
         <div className="section-desc">Configura ogni dettaglio per una stima precisa, utile per capitolati tecnici e preventivi dettagliati.</div>
 
-        <div className="grid-2" style={{ marginBottom: "1rem" }}>
+        <div className="grid-3" style={{ marginBottom: "1rem" }}>
           <div className="form-group">
-            <div className="form-label">Conversazioni / mese</div>
+            <div className="form-label">Conversazioni totali nel periodo</div>
             <input className="form-input" type="number" min={0} value={config.conversations} onChange={(e) => update("conversations", Number(e.target.value))} />
           </div>
           <div className="form-group">
-            <div className="form-label">Durata media conversazione (secondi)</div>
+            <div className="form-label">Periodo di riferimento</div>
+            <select
+              className="form-select"
+              value={customPeriod ? 0 : config.periodMonths}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                if (v === 0) {
+                  setCustomPeriod(true);
+                } else {
+                  setCustomPeriod(false);
+                  update("periodMonths", v);
+                }
+              }}
+            >
+              {PERIOD_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+            {customPeriod && (
+              <input
+                className="form-input"
+                type="number"
+                min={1}
+                max={120}
+                placeholder="N. mesi"
+                style={{ marginTop: "6px" }}
+                value={config.periodMonths}
+                onChange={(e) => update("periodMonths", Math.max(1, Number(e.target.value)))}
+              />
+            )}
+            <div className="form-hint">Le conversazioni si riferiscono a questo periodo</div>
+          </div>
+          <div className="form-group">
+            <div className="form-label">Durata media conversazione (sec)</div>
             <input className="form-input" type="number" min={0} value={config.avgDurationSec} onChange={(e) => update("avgDurationSec", Number(e.target.value))} />
             <div className="form-hint">0 = nessun ASR (chatbot testuale)</div>
           </div>
