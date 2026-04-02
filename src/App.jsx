@@ -552,28 +552,39 @@ Calcolo per sotto-divisione: il peso di ogni sotto-entità rispetto al totale è
 Esempio: se il totale annuale grezzo dei parchi è 543.746 e Oltremare ha 107.440 (19.75%), e le conversazioni AI totali annuali (scenario prudente) sono 160.000, allora Oltremare gestisce 160.000 × 19.75% = 31.600 conversazioni AI.
 
 === REGOLA ANTI-DOPPIO-CONTEGGIO ===
-Gli scenari aggregati (totale annuale) e quelli per sotto-divisione (per parco/sede) rappresentano LO STESSO volume visto da prospettive diverse. NON devono essere sommati tra loro.
+Gli scenari aggregati e quelli per sotto-divisione (per parco/sede) rappresentano LO STESSO volume visto da prospettive diverse. NON devono essere sommati tra loro.
 Per evitare confusione, usa il campo "group" per raggruppare gli scenari:
-- group: "aggregato" per gli scenari totali (bassa stagione + alta stagione + totale annuale)
+- group: "aggregato" per gli scenari principali
 - group: "per_entita" per gli scenari suddivisi per parco/sede/cliente
 Nella risposta JSON, aggiungi anche un campo "groups_note" nel summary che spiega: "Gli scenari 'per_entita' sono una suddivisione degli scenari 'aggregato'. I due gruppi NON vanno sommati."
 
+=== REGOLA SCENARI NON RIDONDANTI ===
+NON creare scenari "Totale Annuale" che sono la semplice somma di bassa + alta stagione. Se hai già creato gli scenari per bassa stagione (7 mesi) e alta stagione (5 mesi), NON aggiungere un terzo scenario annuale ridondante perché il frontend li somma già automaticamente.
+Crea uno scenario annuale (periodMonths: 12) SOLO se l'utente chiede esplicitamente un unico scenario annuale SENZA suddivisione stagionale.
+
+=== REGOLA SCENARI ALTERNATIVI ===
+Quando generi scenari che rappresentano ALTERNATIVE (es. prudente vs ottimista, WaveNet vs Chirp 3), aggiungi il campo "variant" per indicare quali scenari sono mutuamente esclusivi:
+- variant: "prudente_wavenet", "prudente_chirp3", "ottimista_wavenet", "ottimista_chirp3"
+Scenari con variant diverso sono ALTERNATIVE — il costo reale è UNO di essi, non la somma.
+Scenari con lo STESSO variant ma periodo diverso (bassa + alta) VANNO sommati per ottenere il costo annuale.
+
 === ALTRE REGOLE ===
-1. Se l'utente menziona scenari multipli (prudente/ottimista, bassa/alta stagione), crea scenari SEPARATI per ciascuna combinazione.
-2. Se l'utente menziona comparazioni TTS (es. WaveNet vs Chirp 3), duplica gli scenari per ogni modello TTS.
-3. Se l'utente menziona sotto-divisioni (parchi, sedi, clienti), crea scenari per ogni sotto-divisione applicando il filtro proporzionale come descritto sopra.
+1. Se l'utente menziona scenari multipli (prudente/ottimista, bassa/alta stagione), crea scenari SEPARATI per ciascuna combinazione stagionale × livello automazione × modello TTS.
+2. Se l'utente menziona comparazioni TTS (es. WaveNet vs Chirp 3), duplica gli scenari per ogni modello TTS, sia negli aggregati che nelle sotto-divisioni per entità.
+3. Se l'utente menziona sotto-divisioni (parchi, sedi, clienti), crea scenari per ogni sotto-divisione per OGNI combinazione (automazione × TTS) applicando il filtro proporzionale.
 4. Il campo "conversations" deve essere il numero di conversazioni EFFETTIVAMENTE GESTITE DALL'AI dopo tutti i filtri, NON il volume grezzo.
 5. Se l'utente parla di "60.000 chiamate in 7 mesi gestite dall'AI", conversations = 60000 e periodMonths = 7. Se dice "10.000 al mese", conversations = 10000 e periodMonths = 1.
 6. Se l'utente non specifica durata, turni o token, usa i default ragionevoli sopra indicati.
-7. Aggiungi sempre un campo "period" (es. "7 mesi bassa stagione", "5 mesi alta stagione", "12 mesi") per chiarire il periodo coperto.
+7. Aggiungi sempre un campo "period" (es. "7 mesi bassa stagione", "5 mesi alta stagione") per chiarire il periodo coperto.
 8. Per le sotto-divisioni, gli scenari per entità devono coprire lo stesso arco temporale (12 mesi) e la somma delle loro conversazioni deve corrispondere al totale annuale dello scenario corrispondente.
 
 RISPONDI ESCLUSIVAMENTE con un JSON valido in questo formato, senza testo prima o dopo:
 {
-  "summary": "Breve riepilogo di cosa hai capito dalla richiesta (2-3 frasi in italiano). Se ci sono sotto-divisioni, SPECIFICA che gli scenari per entità sono una ripartizione del totale e NON vanno sommati agli aggregati.",
+  "summary": "Breve riepilogo di cosa hai capito dalla richiesta (2-3 frasi in italiano). Se ci sono sotto-divisioni, SPECIFICA che gli scenari per entità sono una ripartizione del totale e NON vanno sommati agli aggregati. Se ci sono alternative (TTS/automazione), SPECIFICA che ogni combinazione va letta come alternativa.",
   "scenarios": [
     {
       "group": "aggregato",
+      "variant": "prudente_wavenet",
       "label": "Bassa stagione - Prudente - WaveNet",
       "period": "7 mesi bassa stagione",
       "periodMonths": 7,
@@ -590,20 +601,33 @@ RISPONDI ESCLUSIVAMENTE con un JSON valido in questo formato, senza testo prima 
       "note": "60.000 conv. = 100.000 informative × 60% automazione"
     },
     {
+      "group": "aggregato",
+      "variant": "prudente_chirp3",
+      "label": "Bassa stagione - Prudente - Chirp 3",
+      "period": "7 mesi bassa stagione",
+      "periodMonths": 7,
+      "conversations": 60000,
+      "ttsModel": "google_tts_studio",
+      "note": "60.000 conv. = 100.000 informative × 60% automazione"
+    },
+    {
       "group": "per_entita",
+      "variant": "prudente_wavenet",
       "label": "Oltremare - Annuale Prudente - WaveNet",
       "period": "12 mesi",
       "periodMonths": 12,
       "conversations": 31600,
-      "avgDurationSec": 90,
-      "turnsPerConv": 3,
-      "asrModel": "google_asr_standard",
       "ttsModel": "google_tts_wavenet",
-      "llmModel": "gemini_flash",
-      "avgInputTokens": 300,
-      "avgOutputTokens": 150,
-      "avgTtsChars": 200,
-      "pctWithTts": 100,
+      "note": "19.75% del totale 160.000 (peso: 107.440/543.746)"
+    },
+    {
+      "group": "per_entita",
+      "variant": "prudente_chirp3",
+      "label": "Oltremare - Annuale Prudente - Chirp 3",
+      "period": "12 mesi",
+      "periodMonths": 12,
+      "conversations": 31600,
+      "ttsModel": "google_tts_studio",
       "note": "19.75% del totale 160.000 (peso: 107.440/543.746)"
     }
   ]
@@ -710,15 +734,40 @@ function AiAssistant({ prices, markup, onLoadScenario }) {
         }, 0);
         groupTotals[g] = { total, monthly, count: scenarios.length };
       }
-      // Grand total uses only "aggregato" group to avoid double-counting
-      const primaryGroup = groups["aggregato"] || Object.values(groups)[0] || [];
-      const grandTotal = primaryGroup.reduce((acc, s) => acc + s.results.totalCost, 0);
-      const grandTotalMonthly = primaryGroup.reduce((acc, s) => {
-        const pm = s._config.periodMonths || 1;
-        return acc + s.results.totalCost / pm;
-      }, 0);
 
-      setAiResult({ summary: parsed.summary, scenarios: withCosts, groups, groupTotals, hasMultipleGroups, grandTotal, grandTotalMonthly });
+      // Detect variants (alternative scenarios) within aggregato
+      const primaryGroup = groups["aggregato"] || Object.values(groups)[0] || [];
+      const variants = {};
+      primaryGroup.forEach((s) => {
+        const v = s.variant || "default";
+        if (!variants[v]) variants[v] = [];
+        variants[v].push(s);
+      });
+      const variantKeys = Object.keys(variants);
+      const hasVariants = variantKeys.length > 1;
+
+      // Calculate per-variant annual totals (sum periods within same variant)
+      const variantTotals = {};
+      for (const [v, vScenarios] of Object.entries(variants)) {
+        const total = vScenarios.reduce((acc, s) => acc + s.results.totalCost, 0);
+        const monthly = vScenarios.reduce((acc, s) => {
+          const pm = s._config.periodMonths || 1;
+          return acc + s.results.totalCost / pm;
+        }, 0);
+        // Build a readable label from variant key
+        const label = v.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+        variantTotals[v] = { total, monthly, count: vScenarios.length, label };
+      }
+
+      // Grand total: if variants exist, show range (min-max), else sum all
+      const variantCosts = Object.values(variantTotals).map(v => v.total);
+      const grandTotal = hasVariants ? Math.min(...variantCosts) : variantCosts.reduce((a, b) => a + b, 0);
+      const grandTotalMax = hasVariants ? Math.max(...variantCosts) : grandTotal;
+      const variantMonthlies = Object.values(variantTotals).map(v => v.monthly);
+      const grandTotalMonthly = hasVariants ? Math.min(...variantMonthlies) : variantMonthlies.reduce((a, b) => a + b, 0);
+      const grandTotalMonthlyMax = hasVariants ? Math.max(...variantMonthlies) : grandTotalMonthly;
+
+      setAiResult({ summary: parsed.summary, scenarios: withCosts, groups, groupTotals, hasMultipleGroups, variants, variantTotals, hasVariants, grandTotal, grandTotalMax, grandTotalMonthly, grandTotalMonthlyMax });
       setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 200);
     } catch (err) {
       if (err instanceof SyntaxError) {
@@ -832,26 +881,94 @@ function AiAssistant({ prices, markup, onLoadScenario }) {
           <div className="ai-grand-total">
             <div>
               <div style={{ fontSize: "12px", color: "var(--text-mid)", marginBottom: "2px" }}>
-                {aiResult.hasMultipleGroups
-                  ? "Costo API totale — solo scenari aggregati (no dettaglio per entità)"
-                  : "Costo API totale — somma di tutti gli scenari"}
+                {aiResult.hasVariants
+                  ? "Range costo API annuale — scenari alternativi"
+                  : aiResult.hasMultipleGroups
+                    ? "Costo API totale — solo scenari aggregati (no dettaglio per entità)"
+                    : "Costo API totale"}
               </div>
-              <div style={{ fontSize: "28px", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: "var(--navy)" }}>
-                {fmtEur(aiResult.grandTotal)}
-              </div>
-              {markup > 0 && (
-                <div style={{ fontSize: "14px", color: "var(--orange)", fontFamily: "'JetBrains Mono', monospace", marginTop: "2px" }}>
-                  Vendita: {fmtEur(aiResult.grandTotal * (1 + markup / 100))} (+{markup}%)
-                </div>
+              {aiResult.hasVariants ? (
+                <>
+                  <div style={{ fontSize: "28px", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: "var(--navy)" }}>
+                    {fmtEur(aiResult.grandTotal)} — {fmtEur(aiResult.grandTotalMax)}
+                  </div>
+                  {markup > 0 && (
+                    <div style={{ fontSize: "14px", color: "var(--orange)", fontFamily: "'JetBrains Mono', monospace", marginTop: "2px" }}>
+                      Vendita: {fmtEur(aiResult.grandTotal * (1 + markup / 100))} — {fmtEur(aiResult.grandTotalMax * (1 + markup / 100))} (+{markup}%)
+                    </div>
+                  )}
+                  <div style={{ fontSize: "12px", color: "var(--text-light)", marginTop: "4px", fontFamily: "'JetBrains Mono', monospace" }}>
+                    Mensile: {fmtEur(aiResult.grandTotalMonthly)} — {fmtEur(aiResult.grandTotalMonthlyMax)}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize: "28px", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: "var(--navy)" }}>
+                    {fmtEur(aiResult.grandTotal)}
+                  </div>
+                  {markup > 0 && (
+                    <div style={{ fontSize: "14px", color: "var(--orange)", fontFamily: "'JetBrains Mono', monospace", marginTop: "2px" }}>
+                      Vendita: {fmtEur(aiResult.grandTotal * (1 + markup / 100))} (+{markup}%)
+                    </div>
+                  )}
+                  <div style={{ fontSize: "12px", color: "var(--text-light)", marginTop: "4px", fontFamily: "'JetBrains Mono', monospace" }}>
+                    Media mensile stimata: {fmtEur(aiResult.grandTotalMonthly)} — Annualizzato: {fmtEur(aiResult.grandTotalMonthly * 12)}
+                  </div>
+                </>
               )}
-              <div style={{ fontSize: "12px", color: "var(--text-light)", marginTop: "4px", fontFamily: "'JetBrains Mono', monospace" }}>
-                Media mensile stimata: {fmtEur(aiResult.grandTotalMonthly)} — Annualizzato: {fmtEur(aiResult.grandTotalMonthly * 12)}
-              </div>
             </div>
             <div style={{ fontSize: "12px", color: "var(--text-light)" }}>
               {aiResult.scenarios.length} scenari generati
             </div>
           </div>
+
+          {/* Variant comparison table */}
+          {aiResult.hasVariants && aiResult.variantTotals && (
+            <div style={{
+              background: "white",
+              border: "1px solid var(--border)",
+              borderRadius: "10px",
+              padding: "16px",
+              marginBottom: "16px",
+            }}>
+              <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--navy)", marginBottom: "10px" }}>
+                Confronto scenari alternativi
+              </div>
+              <div style={{ fontSize: "11px", color: "var(--text-light)", marginBottom: "10px" }}>
+                Ogni riga rappresenta una combinazione alternativa. Scegli UNA riga come riferimento per il costo.
+              </div>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
+                <thead>
+                  <tr style={{ borderBottom: "2px solid var(--navy)" }}>
+                    <th style={{ textAlign: "left", padding: "6px 8px", color: "var(--navy)" }}>Scenario</th>
+                    <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--navy)" }}>Costo periodo</th>
+                    <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--navy)" }}>/ mese</th>
+                    <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--navy)" }}>Annualizzato</th>
+                    {markup > 0 && <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--orange)" }}>Vendita anno</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(aiResult.variantTotals).map(([v, vt], idx) => {
+                    const isMin = vt.total === Math.min(...Object.values(aiResult.variantTotals).map(x => x.total));
+                    const isMax = vt.total === Math.max(...Object.values(aiResult.variantTotals).map(x => x.total));
+                    return (
+                      <tr key={v} style={{ borderBottom: "1px solid var(--border)", background: isMin ? "#f0fdf4" : isMax ? "#fef2f2" : "transparent" }}>
+                        <td style={{ padding: "8px", fontWeight: 600 }}>
+                          {vt.label}
+                          {isMin && <span style={{ marginLeft: "6px", fontSize: "10px", color: "#16a34a" }}>MIN</span>}
+                          {isMax && <span style={{ marginLeft: "6px", fontSize: "10px", color: "#dc2626" }}>MAX</span>}
+                        </td>
+                        <td style={{ textAlign: "right", padding: "8px", fontFamily: "'JetBrains Mono', monospace" }}>{fmtEur(vt.total)}</td>
+                        <td style={{ textAlign: "right", padding: "8px", fontFamily: "'JetBrains Mono', monospace" }}>{fmtEur(vt.monthly)}</td>
+                        <td style={{ textAlign: "right", padding: "8px", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{fmtEur(vt.monthly * 12)}</td>
+                        {markup > 0 && <td style={{ textAlign: "right", padding: "8px", fontFamily: "'JetBrains Mono', monospace", color: "var(--orange)" }}>{fmtEur(vt.monthly * 12 * (1 + markup / 100))}</td>}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
 
           {/* Anti-double-counting warning */}
           {aiResult.hasMultipleGroups && (
