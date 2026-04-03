@@ -69,11 +69,11 @@ const PROFILES = [
     name: "Voicebot Economico",
     desc: "Voicebot con STT Google standard, TTS Google WaveNet e Gemini Flash. Ideale per volumi alti dove il costo è prioritario.",
     config: {
-      conversations: 10000, avgDurationSec: 90, turnsPerConv: 3,
+      conversations: 10000, avgDurationSec: 120, turnsPerConv: 4,
       asrModel: "google_asr_standard", ttsModel: "google_tts_wavenet", llmModel: "gemini_flash",
-      avgInputTokens: 300, avgOutputTokens: 150, avgTtsChars: 120, pctWithTts: 100,
+      avgInputTokens: 350, avgOutputTokens: 200, avgTtsChars: 200, pctWithTts: 100,
     },
-    specs: ["STT Standard", "TTS WaveNet", "Gemini Flash", "~90s/conv"],
+    specs: ["STT Standard", "TTS WaveNet", "Gemini Flash", "~2min/conv"],
   },
   {
     id: "voicebot-premium",
@@ -115,33 +115,33 @@ const DEFAULT_COMPARE_CONFIGS = [
   {
     label: "Gemini Flash + Google WaveNet",
     config: {
-      avgDurationSec: 90, turnsPerConv: 3,
+      avgDurationSec: 120, turnsPerConv: 4,
       asrModel: "google_asr_standard", ttsModel: "google_tts_wavenet", llmModel: "gemini_flash",
-      avgInputTokens: 300, avgOutputTokens: 150, avgTtsChars: 120, pctWithTts: 100,
+      avgInputTokens: 350, avgOutputTokens: 200, avgTtsChars: 200, pctWithTts: 100,
     },
   },
   {
     label: "Gemini Flash + ElevenLabs Flash 2.5",
     config: {
-      avgDurationSec: 90, turnsPerConv: 3,
+      avgDurationSec: 120, turnsPerConv: 4,
       asrModel: "google_asr_standard", ttsModel: "elevenlabs_flash_25", llmModel: "gemini_flash",
-      avgInputTokens: 300, avgOutputTokens: 150, avgTtsChars: 120, pctWithTts: 100,
+      avgInputTokens: 350, avgOutputTokens: 200, avgTtsChars: 200, pctWithTts: 100,
     },
   },
   {
     label: "GPT-4.1 + Google WaveNet",
     config: {
-      avgDurationSec: 90, turnsPerConv: 3,
+      avgDurationSec: 120, turnsPerConv: 4,
       asrModel: "google_asr_standard", ttsModel: "google_tts_wavenet", llmModel: "gpt41",
-      avgInputTokens: 300, avgOutputTokens: 150, avgTtsChars: 120, pctWithTts: 100,
+      avgInputTokens: 350, avgOutputTokens: 200, avgTtsChars: 200, pctWithTts: 100,
     },
   },
   {
     label: "GPT-4.1 + ElevenLabs Flash 2.5",
     config: {
-      avgDurationSec: 90, turnsPerConv: 3,
+      avgDurationSec: 120, turnsPerConv: 4,
       asrModel: "google_asr_standard", ttsModel: "elevenlabs_flash_25", llmModel: "gpt41",
-      avgInputTokens: 300, avgOutputTokens: 150, avgTtsChars: 120, pctWithTts: 100,
+      avgInputTokens: 350, avgOutputTokens: 200, avgTtsChars: 200, pctWithTts: 100,
     },
   },
 ];
@@ -512,75 +512,57 @@ function QuickMode({ prices, markup }) {
 }
 
 // ─── AI System Prompt ───
-const AI_SYSTEM_PROMPT = `Sei un esperto di AI conversazionale di Ellysse. Il tuo compito è analizzare la descrizione di uno scenario commerciale scritta in linguaggio naturale e trasformarla in uno o più scenari strutturati per il simulatore costi AI.
+const AI_SYSTEM_PROMPT = `Sei un esperto di AI conversazionale di Ellysse. Analizzi scenari commerciali in linguaggio naturale e li trasformi in scenari strutturati JSON per il simulatore costi.
 
-CONTESTO TECNICO:
-- ASR (Speech-to-Text): Google STT. Modelli: "google_asr_standard" ($0.024/min), "google_asr_enhanced" ($0.036/min)
-- TTS (Text-to-Speech): Google o ElevenLabs. Modelli: "google_tts_standard", "google_tts_wavenet", "google_tts_neural2", "google_tts_studio" (Chirp 3), "elevenlabs_flash_25", "elevenlabs_multi_v1", "elevenlabs_multi_v2"
+MODELLI DISPONIBILI:
+- ASR: "google_asr_standard" ($0.024/min), "google_asr_enhanced" ($0.036/min)
+- TTS Google: "google_tts_standard", "google_tts_wavenet", "google_tts_neural2", "google_tts_studio" (Chirp 3)
+- TTS ElevenLabs: "elevenlabs_flash_25", "elevenlabs_multi_v1", "elevenlabs_multi_v2"
 - LLM: "gemini_flash" (Gemini 2.5 Flash), "gpt41" (GPT-4.1)
 
-PARAMETRI PER OGNI SCENARIO:
-- label: nome descrittivo dello scenario (es. "Bassa stagione — WaveNet — Prudente")
-- periodMonths: numero di mesi coperti da questo scenario. CRUCIALE: se l'utente dice "60.000 chiamate in 7 mesi", periodMonths = 7 e conversations = 60000. Se dice "10.000 al mese", periodMonths = 1 e conversations = 10000.
-- conversations: numero TOTALE di conversazioni nel periodo indicato (NON mensile, a meno che periodMonths = 1)
-- avgDurationSec: durata media conversazione in secondi (default 90, 0 per chatbot)
-- turnsPerConv: numero medio di turni bot per conversazione (default 3)
-- asrModel: chiave del modello ASR (default "google_asr_standard")
-- ttsModel: chiave del modello TTS
-- llmModel: chiave del modello LLM (default "gemini_flash")
-- avgInputTokens: token input medi per turno (default 300)
-- avgOutputTokens: token output medi per turno (default 150)
-- avgTtsChars: caratteri medi per risposta TTS (default 200, circa 30 parole)
-- pctWithTts: percentuale conversazioni con TTS (default 100 per voicebot, 0 per chatbot)
-- note: breve nota sul perché di questo scenario
+CAMPI PER OGNI SCENARIO:
+- group: "aggregato" | "per_entita" (gli scenari per_entita NON vanno sommati agli aggregati)
+- variant: identificativo della combinazione alternativa (es. "prudente_wavenet", "ottimista_chirp3"). Scenari con variant diverso sono ALTERNATIVE, non sommabili. Scenari con STESSO variant ma periodo diverso vanno sommati.
+- label: nome descrittivo
+- period: descrizione leggibile del periodo (es. "7 mesi bassa stagione")
+- periodMonths: mesi coperti (CRUCIALE per il calcolo corretto)
+- conversations: conversazioni AI nel periodo (GIA' FILTRATE, vedi regole sotto)
+- avgDurationSec: durata media in secondi (default 120 per voicebot, 0 per chatbot)
+- turnsPerConv: turni medi (default 4)
+- asrModel, ttsModel, llmModel: chiavi modello
+- avgInputTokens: default 350 | avgOutputTokens: default 200 | avgTtsChars: default 200
+- pctWithTts: 100 per voicebot, 0 per chatbot
+- note: breve spiegazione del calcolo
 
-REGOLE IMPORTANTI:
+=== REGOLA 1: FILTRAGGIO VOLUMI ===
+Quando l'utente fornisce volumi GREZZI e poi specifica filtri, applica TUTTI i filtri in cascata:
+  Volume grezzo → % informative → % automazione bot = conversazioni AI
 
-=== REGOLA CRITICA: FILTRAGGIO VOLUMI ===
-Quando l'utente fornisce volumi grezzi (es. "45.000 chiamate/mese totali") e poi specifica filtri (es. "35% informative", "il bot gestisce il 60%"), DEVI applicare TUTTI i filtri in cascata per ottenere il numero di conversazioni effettivamente gestite dall'AI.
+Esempio: 45.000 chiamate/mese, 35% informative, bot gestisce 60%:
+  45.000 × 35% = 15.750 informative → × 60% = 9.450 gestite AI/mese
+  Per 7 mesi: 66.150 → se l'utente arrotonda a 60.000, usa il valore dell'utente.
 
-Esempio di calcolo corretto:
-- 45.000 chiamate/mese totali
-- 35% informative in bassa stagione = 15.750 informative/mese
-- Bot gestisce il 60% = 9.450 gestite da AI/mese
-- Per 7 mesi = 66.150 conversazioni AI in bassa stagione
-- L'utente arrotonda a 60.000? Usa il valore indicato dall'utente.
+Se l'utente fornisce direttamente le conversazioni gestite dall'AI (es. "60.000 gestite dal bot in 7 mesi"), usa quel numero SENZA ulteriori filtri.
 
-Lo stesso vale per le sotto-divisioni (parchi, sedi, clienti): se l'utente fornisce il volume TOTALE annuale di un parco (es. "Oltremare 107.440"), quel numero rappresenta le chiamate totali grezze del parco, NON le conversazioni gestite da AI. Devi applicare gli stessi filtri (% informative × % automazione bot) anche a quei numeri, proporzionalmente.
+=== REGOLA 2: SOTTO-DIVISIONI (parchi, sedi, clienti) ===
+I volumi grezzi per entità servono SOLO per calcolare il peso proporzionale.
+Metodo: peso_entità = volume_entità / somma_volumi_tutte_entità
+Poi: conversazioni_AI_entità = conversazioni_AI_totali × peso_entità
 
-Calcolo per sotto-divisione: il peso di ogni sotto-entità rispetto al totale è dato dal rapporto tra il suo volume e la somma di tutti i volumi. Usa quel peso per ripartire le conversazioni AI già calcolate a livello aggregato.
-Esempio: se il totale annuale grezzo dei parchi è 543.746 e Oltremare ha 107.440 (19.75%), e le conversazioni AI totali annuali (scenario prudente) sono 160.000, allora Oltremare gestisce 160.000 × 19.75% = 31.600 conversazioni AI.
+Esempio: Oltremare 107.440 su totale 543.746 = 19.76%
+Se totale AI annuale = 160.000 → Oltremare = 160.000 × 19.76% = 31.600
 
-=== REGOLA ANTI-DOPPIO-CONTEGGIO ===
-Gli scenari aggregati e quelli per sotto-divisione (per parco/sede) rappresentano LO STESSO volume visto da prospettive diverse. NON devono essere sommati tra loro.
-Per evitare confusione, usa il campo "group" per raggruppare gli scenari:
-- group: "aggregato" per gli scenari principali
-- group: "per_entita" per gli scenari suddivisi per parco/sede/cliente
-Nella risposta JSON, aggiungi anche un campo "groups_note" nel summary che spiega: "Gli scenari 'per_entita' sono una suddivisione degli scenari 'aggregato'. I due gruppi NON vanno sommati."
+Per le entità usa periodMonths: 12 (annuale). Applica il breakdown per OGNI combinazione variant (automazione × TTS).
 
-=== REGOLA SCENARI NON RIDONDANTI ===
-NON creare scenari "Totale Annuale" che sono la semplice somma di bassa + alta stagione. Se hai già creato gli scenari per bassa stagione (7 mesi) e alta stagione (5 mesi), NON aggiungere un terzo scenario annuale ridondante perché il frontend li somma già automaticamente.
-Crea uno scenario annuale (periodMonths: 12) SOLO se l'utente chiede esplicitamente un unico scenario annuale SENZA suddivisione stagionale.
+=== REGOLA 3: NIENTE SCENARI RIDONDANTI ===
+Se generi bassa stagione (7 mesi) + alta stagione (5 mesi), NON aggiungere un terzo scenario "Totale Annuale" — il frontend somma automaticamente i sub-periodi dello stesso variant.
 
-=== REGOLA SCENARI ALTERNATIVI ===
-Quando generi scenari che rappresentano ALTERNATIVE (es. prudente vs ottimista, WaveNet vs Chirp 3), aggiungi il campo "variant" per indicare quali scenari sono mutuamente esclusivi:
-- variant: "prudente_wavenet", "prudente_chirp3", "ottimista_wavenet", "ottimista_chirp3"
-Scenari con variant diverso sono ALTERNATIVE — il costo reale è UNO di essi, non la somma.
-Scenari con lo STESSO variant ma periodo diverso (bassa + alta) VANNO sommati per ottenere il costo annuale.
+=== REGOLA 4: CONFRONTI TTS ===
+Se l'utente chiede confronto TTS (es. WaveNet vs Chirp 3), duplica TUTTI gli scenari per ogni modello TTS, comprese le sotto-divisioni per entità.
 
-=== ALTRE REGOLE ===
-1. Se l'utente menziona scenari multipli (prudente/ottimista, bassa/alta stagione), crea scenari SEPARATI per ciascuna combinazione stagionale × livello automazione × modello TTS.
-2. Se l'utente menziona comparazioni TTS (es. WaveNet vs Chirp 3), duplica gli scenari per ogni modello TTS, sia negli aggregati che nelle sotto-divisioni per entità.
-3. Se l'utente menziona sotto-divisioni (parchi, sedi, clienti), crea scenari per ogni sotto-divisione per OGNI combinazione (automazione × TTS) applicando il filtro proporzionale.
-4. Il campo "conversations" deve essere il numero di conversazioni EFFETTIVAMENTE GESTITE DALL'AI dopo tutti i filtri, NON il volume grezzo.
-5. Se l'utente parla di "60.000 chiamate in 7 mesi gestite dall'AI", conversations = 60000 e periodMonths = 7. Se dice "10.000 al mese", conversations = 10000 e periodMonths = 1.
-6. Se l'utente non specifica durata, turni o token, usa i default ragionevoli sopra indicati.
-7. Aggiungi sempre un campo "period" (es. "7 mesi bassa stagione", "5 mesi alta stagione") per chiarire il periodo coperto.
-8. Per le sotto-divisioni, gli scenari per entità devono coprire lo stesso arco temporale (12 mesi) e la somma delle loro conversazioni deve corrispondere al totale annuale dello scenario corrispondente.
-
-RISPONDI ESCLUSIVAMENTE con un JSON valido in questo formato, senza testo prima o dopo:
+RISPONDI SOLO con JSON valido, nessun testo prima o dopo:
 {
-  "summary": "Breve riepilogo di cosa hai capito dalla richiesta (2-3 frasi in italiano). Se ci sono sotto-divisioni, SPECIFICA che gli scenari per entità sono una ripartizione del totale e NON vanno sommati agli aggregati. Se ci sono alternative (TTS/automazione), SPECIFICA che ogni combinazione va letta come alternativa.",
+  "summary": "Riepilogo in italiano (2-3 frasi). Specifica: gli scenari per_entita sono suddivisione degli aggregati e NON vanno sommati. Ogni combinazione (variant) è un'alternativa.",
   "scenarios": [
     {
       "group": "aggregato",
@@ -589,46 +571,16 @@ RISPONDI ESCLUSIVAMENTE con un JSON valido in questo formato, senza testo prima 
       "period": "7 mesi bassa stagione",
       "periodMonths": 7,
       "conversations": 60000,
-      "avgDurationSec": 90,
-      "turnsPerConv": 3,
+      "avgDurationSec": 120,
+      "turnsPerConv": 4,
       "asrModel": "google_asr_standard",
       "ttsModel": "google_tts_wavenet",
       "llmModel": "gemini_flash",
-      "avgInputTokens": 300,
-      "avgOutputTokens": 150,
+      "avgInputTokens": 350,
+      "avgOutputTokens": 200,
       "avgTtsChars": 200,
       "pctWithTts": 100,
-      "note": "60.000 conv. = 100.000 informative × 60% automazione"
-    },
-    {
-      "group": "aggregato",
-      "variant": "prudente_chirp3",
-      "label": "Bassa stagione - Prudente - Chirp 3",
-      "period": "7 mesi bassa stagione",
-      "periodMonths": 7,
-      "conversations": 60000,
-      "ttsModel": "google_tts_studio",
-      "note": "60.000 conv. = 100.000 informative × 60% automazione"
-    },
-    {
-      "group": "per_entita",
-      "variant": "prudente_wavenet",
-      "label": "Oltremare - Annuale Prudente - WaveNet",
-      "period": "12 mesi",
-      "periodMonths": 12,
-      "conversations": 31600,
-      "ttsModel": "google_tts_wavenet",
-      "note": "19.75% del totale 160.000 (peso: 107.440/543.746)"
-    },
-    {
-      "group": "per_entita",
-      "variant": "prudente_chirp3",
-      "label": "Oltremare - Annuale Prudente - Chirp 3",
-      "period": "12 mesi",
-      "periodMonths": 12,
-      "conversations": 31600,
-      "ttsModel": "google_tts_studio",
-      "note": "19.75% del totale 160.000 (peso: 107.440/543.746)"
+      "note": "60.000 = 100.000 informative × 60% automazione"
     }
   ]
 }`;
@@ -1181,12 +1133,28 @@ function AiAssistant({ prices, markup, onLoadScenario }) {
   );
 }
 
+// ─── Scenario Builder (primary tab, wraps AI Assistant) ───
+function ScenarioBuilder({ prices, markup }) {
+  return (
+    <div>
+      <div style={{ marginBottom: "20px" }}>
+        <h2 style={{ fontSize: "20px", color: "var(--navy)", marginBottom: "6px" }}>Scenario Builder AI</h2>
+        <p style={{ fontSize: "13px", color: "var(--text-mid)", lineHeight: 1.5, margin: 0 }}>
+          Descrivi lo scenario commerciale in linguaggio naturale. L'AI analizzerà automaticamente volumi, stagionalità,
+          livelli di automazione e modelli TTS/LLM per generare una stima strutturata con breakdown per entità e confronto alternative.
+        </p>
+      </div>
+      <AiAssistant prices={prices} markup={markup} onLoadScenario={null} />
+    </div>
+  );
+}
+
 // ─── Advanced Mode ───
 function AdvancedMode({ prices, markup }) {
   const [config, setConfig] = useState({
-    conversations: 10000, avgDurationSec: 90, turnsPerConv: 3,
+    conversations: 10000, avgDurationSec: 120, turnsPerConv: 4,
     asrModel: "google_asr_standard", ttsModel: "google_tts_wavenet", llmModel: "gemini_flash",
-    avgInputTokens: 300, avgOutputTokens: 150, avgTtsChars: 120, pctWithTts: 100,
+    avgInputTokens: 350, avgOutputTokens: 200, avgTtsChars: 200, pctWithTts: 100,
     periodMonths: 1,
   });
 
@@ -1570,7 +1538,7 @@ function CompareMode({ prices, markup }) {
 
 // ─── Main App ───
 export default function App() {
-  const [mode, setMode] = useState("quick");
+  const [mode, setMode] = useState("builder");
   const [prices, setPrices] = useState({ ...DEFAULT_PRICES });
   const [markup, setMarkup] = useState(30);
 
@@ -1591,6 +1559,9 @@ export default function App() {
       <div className="main-wrap">
         {/* Mode tabs */}
         <div className="mode-tabs no-print">
+          <button className={`mode-tab ${mode === "builder" ? "active" : ""}`} onClick={() => setMode("builder")}>
+            ✦ Scenario Builder AI
+          </button>
           <button className={`mode-tab ${mode === "quick" ? "active" : ""}`} onClick={() => setMode("quick")}>
             Stima rapida
           </button>
@@ -1611,6 +1582,7 @@ export default function App() {
         <div className="divider" />
 
         {/* Content */}
+        {mode === "builder" && <ScenarioBuilder prices={prices} markup={markup} />}
         {mode === "quick" && <QuickMode prices={prices} markup={markup} />}
         {mode === "advanced" && <AdvancedMode prices={prices} markup={markup} />}
         {mode === "compare" && <CompareMode prices={prices} markup={markup} />}
