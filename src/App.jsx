@@ -453,14 +453,21 @@ CAMPI PER OGNI SCENARIO:
 - note: breve spiegazione del calcolo
 
 === REGOLA 1: FILTRAGGIO VOLUMI ===
-Quando l'utente fornisce volumi GREZZI e poi specifica filtri, applica TUTTI i filtri in cascata:
+PRIORITÀ ASSOLUTA: se l'utente specifica un TOTALE ESPLICITO di conversazioni AI (es. "200.000 risposte gestite dal bot all'anno", "prendi 200.000 come valore annuo"), USA QUEL NUMERO ESATTAMENTE, senza ricalcolare dai volumi grezzi. I volumi grezzi e i filtri servono solo come contesto/giustificazione, NON per sovrascrivere il numero esplicito dell'utente.
+
+Per distribuire il totale esplicito nei sub-periodi, usa le proporzioni dei volumi grezzi filtrati:
+  1. Calcola le conversazioni AI per ogni periodo dai grezzi: bassa = grezzo × %info × %bot × mesi, alta = idem
+  2. Calcola il peso di ogni periodo: peso_bassa = conv_bassa / (conv_bassa + conv_alta)
+  3. Applica: conv_bassa_finale = totale_utente × peso_bassa, conv_alta_finale = totale_utente × peso_alta
+
+Esempio: utente dice "200.000 annue". Dai grezzi: bassa = 66.150, alta = 121.500, totale = 187.650.
+  peso_bassa = 66.150/187.650 = 35.25%, peso_alta = 64.75%
+  → bassa = 200.000 × 35.25% = 70.500, alta = 200.000 × 64.75% = 129.500
+
+Se l'utente NON fornisce un totale esplicito, allora calcola normalmente dai grezzi:
   Volume grezzo → % informative → % automazione bot = conversazioni AI
-
-Esempio: 45.000 chiamate/mese, 35% informative, bot gestisce 60%:
+  Esempio: 45.000 chiamate/mese, 35% informative, bot gestisce 60%:
   45.000 × 35% = 15.750 informative → × 60% = 9.450 gestite AI/mese
-  Per 7 mesi: 66.150 → se l'utente arrotonda a 60.000, usa il valore dell'utente.
-
-Se l'utente fornisce direttamente le conversazioni gestite dall'AI (es. "60.000 gestite dal bot in 7 mesi"), usa quel numero SENZA ulteriori filtri.
 
 === REGOLA 2: SOTTO-DIVISIONI (parchi, sedi, clienti) ===
 I volumi grezzi per entità servono SOLO per calcolare il peso proporzionale.
