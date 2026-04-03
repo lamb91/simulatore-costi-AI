@@ -12,13 +12,60 @@ function AiProvider({ children }) {
   const [loading, setLoading] = useState(false);
   const [aiResult, setAiResult] = useState(null);
   const [error, setError] = useState("");
+  const [clientName, setClientName] = useState("");
+  const [projectName, setProjectName] = useState("");
 
   useEffect(() => {
     try { if (apiKey) window.localStorage.setItem("ellysse_ai_key", apiKey); } catch {}
   }, [apiKey]);
 
+  // ─── Save / Load scenarios ───
+  const getSavedScenarios = useCallback(() => {
+    try {
+      return JSON.parse(window.localStorage.getItem("ellysse_scenarios") || "[]");
+    } catch { return []; }
+  }, []);
+
+  const saveScenario = useCallback((name) => {
+    if (!aiResult || !name.trim()) return;
+    try {
+      const saved = getSavedScenarios();
+      const entry = {
+        id: Date.now(),
+        name: name.trim(),
+        client: clientName,
+        project: projectName,
+        date: new Date().toISOString(),
+        prompt,
+        aiResult,
+      };
+      saved.unshift(entry);
+      if (saved.length > 20) saved.pop();
+      window.localStorage.setItem("ellysse_scenarios", JSON.stringify(saved));
+    } catch {}
+  }, [aiResult, clientName, projectName, prompt, getSavedScenarios]);
+
+  const loadScenario = useCallback((entry) => {
+    setPrompt(entry.prompt || "");
+    setAiResult(entry.aiResult || null);
+    setClientName(entry.client || "");
+    setProjectName(entry.project || "");
+    setError("");
+  }, []);
+
+  const deleteScenario = useCallback((id) => {
+    try {
+      const saved = getSavedScenarios().filter(s => s.id !== id);
+      window.localStorage.setItem("ellysse_scenarios", JSON.stringify(saved));
+    } catch {}
+  }, [getSavedScenarios]);
+
   return (
-    <AiContext.Provider value={{ apiKey, setApiKey, prompt, setPrompt, loading, setLoading, aiResult, setAiResult, error, setError }}>
+    <AiContext.Provider value={{
+      apiKey, setApiKey, prompt, setPrompt, loading, setLoading, aiResult, setAiResult, error, setError,
+      clientName, setClientName, projectName, setProjectName,
+      getSavedScenarios, saveScenario, loadScenario, deleteScenario,
+    }}>
       {children}
     </AiContext.Provider>
   );
@@ -47,21 +94,21 @@ const COLORS = {
   llm: "#27ae60",
 };
 
-// ─── Default pricing (editable) ───
+// ─── Default pricing in EUR (converted from USD listini at 1 EUR = 1.15 USD) ───
 const DEFAULT_PRICES = {
-  google_asr_standard: 0.024,
-  google_asr_enhanced: 0.036,
-  google_tts_standard: 4.0,
-  google_tts_wavenet: 16.0,
-  google_tts_neural2: 16.0,
-  google_tts_studio: 30.0,
-  elevenlabs_flash_25: 0.06,
-  elevenlabs_multi_v1: 0.12,
-  elevenlabs_multi_v2: 0.12,
-  gemini_flash_input: 0.30,
-  gemini_flash_output: 2.50,
-  gpt41_input: 2.00,
-  gpt41_output: 8.00,
+  google_asr_standard: 0.021,
+  google_asr_enhanced: 0.031,
+  google_tts_standard: 3.48,
+  google_tts_wavenet: 13.91,
+  google_tts_neural2: 13.91,
+  google_tts_studio: 26.09,
+  elevenlabs_flash_25: 0.052,
+  elevenlabs_multi_v1: 0.104,
+  elevenlabs_multi_v2: 0.104,
+  gemini_flash_input: 0.26,
+  gemini_flash_output: 2.17,
+  gpt41_input: 1.74,
+  gpt41_output: 6.96,
 };
 
 // ─── Model option labels ───
@@ -328,11 +375,11 @@ function PriceSettings({ prices, setPrices }) {
       {open && (
         <div className="settings-panel">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
-            <span style={{ fontSize: "12px", color: "var(--text-mid)" }}>I prezzi sono in USD. Modifica i valori per aggiornare la simulazione in tempo reale.</span>
+            <span style={{ fontSize: "12px", color: "var(--text-mid)" }}>Prezzi in EUR (convertiti da listini USD al cambio 1€ = 1,15$). Modificabili in tempo reale.</span>
             <button className="btn-outline" style={{ padding: "6px 14px", fontSize: "12px" }} onClick={reset}>Reset default</button>
           </div>
 
-          <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--navy)", marginBottom: "8px" }}>ASR — Google Speech-to-Text ($/minuto)</div>
+          <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--navy)", marginBottom: "8px" }}>ASR — Google Speech-to-Text (€/minuto)</div>
           <div className="settings-grid" style={{ marginBottom: "16px" }}>
             {Object.entries(ASR_MODELS).map(([key, label]) => (
               <div className="settings-item" key={key}>
@@ -342,7 +389,7 @@ function PriceSettings({ prices, setPrices }) {
             ))}
           </div>
 
-          <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--navy)", marginBottom: "8px" }}>TTS — Google ($/1M caratteri)</div>
+          <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--navy)", marginBottom: "8px" }}>TTS — Google (€/1M caratteri)</div>
           <div className="settings-grid" style={{ marginBottom: "16px" }}>
             {["google_tts_standard", "google_tts_wavenet", "google_tts_neural2", "google_tts_studio"].map((key) => (
               <div className="settings-item" key={key}>
@@ -352,7 +399,7 @@ function PriceSettings({ prices, setPrices }) {
             ))}
           </div>
 
-          <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--navy)", marginBottom: "8px" }}>TTS — ElevenLabs ($/1K caratteri)</div>
+          <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--navy)", marginBottom: "8px" }}>TTS — ElevenLabs (€/1K caratteri)</div>
           <div className="settings-grid" style={{ marginBottom: "16px" }}>
             {["elevenlabs_flash_25", "elevenlabs_multi_v1", "elevenlabs_multi_v2"].map((key) => (
               <div className="settings-item" key={key}>
@@ -362,7 +409,7 @@ function PriceSettings({ prices, setPrices }) {
             ))}
           </div>
 
-          <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--navy)", marginBottom: "8px" }}>LLM ($/1M token)</div>
+          <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--navy)", marginBottom: "8px" }}>LLM (€/1M token)</div>
           <div className="settings-grid">
             <div className="settings-item">
               <div className="settings-item-label">Gemini 2.5 Flash — Input</div>
@@ -432,8 +479,8 @@ function MarkupBar({ markup, setMarkup }) {
 // ─── AI System Prompt ───
 const AI_SYSTEM_PROMPT = `Sei un esperto di AI conversazionale di Ellysse. Analizzi scenari commerciali in linguaggio naturale e li trasformi in scenari strutturati JSON per il simulatore costi.
 
-MODELLI DISPONIBILI:
-- ASR: "google_asr_standard" ($0.024/min), "google_asr_enhanced" ($0.036/min)
+MODELLI DISPONIBILI (prezzi indicativi in EUR):
+- ASR: "google_asr_standard" (€0.021/min), "google_asr_enhanced" (€0.031/min)
 - TTS Google: "google_tts_standard", "google_tts_wavenet", "google_tts_neural2", "google_tts_studio" (Chirp 3)
 - TTS ElevenLabs: "elevenlabs_flash_25", "elevenlabs_multi_v1", "elevenlabs_multi_v2"
 - LLM: "gemini_flash" (Gemini 2.5 Flash), "gpt41" (GPT-4.1)
@@ -769,7 +816,7 @@ function AiAssistantInput({ prices, markup }) {
 
 // ─── AI Assistant Results Component (right panel) ───
 function AiAssistantResults({ prices, markup }) {
-  const { aiResult, loading } = useContext(AiContext);
+  const { aiResult, loading, clientName, projectName } = useContext(AiContext);
   const resultRef = useRef(null);
 
   if (loading) {
@@ -814,6 +861,22 @@ function AiAssistantResults({ prices, markup }) {
 
   return (
     <div className="builder-results" ref={resultRef}>
+          {/* Print-only branded header */}
+          <div className="print-header">
+            <div className="print-header-brand">
+              <span className="print-header-logo">✦</span>
+              <span className="print-header-company">ELLYSSE</span>
+              <span className="print-header-divider">|</span>
+              <span className="print-header-tool">Simulatore Costi AI</span>
+            </div>
+            <div className="print-header-meta">
+              {clientName && <div className="print-header-client">{clientName}</div>}
+              {projectName && <div className="print-header-project">{projectName}</div>}
+              <div className="print-header-date">Generato il {new Date().toLocaleDateString("it-IT", { day: "numeric", month: "long", year: "numeric" })}</div>
+            </div>
+            {(clientName || projectName) && <div className="print-header-line" />}
+          </div>
+
           {/* Summary */}
           <div className="ai-summary">
             <div className="ai-summary-label">Interpretazione AI</div>
@@ -1147,6 +1210,37 @@ function AiAssistant({ prices, markup, onLoadScenario }) {
 
 // ─── Scenario Builder (primary tab, full-screen AI experience) ───
 function ScenarioBuilder({ prices, markup, setPrices, setMarkup }) {
+  const { clientName, setClientName, projectName, setProjectName, aiResult, getSavedScenarios, saveScenario, loadScenario, deleteScenario } = useContext(AiContext);
+  const [saveName, setSaveName] = useState("");
+  const [showSaved, setShowSaved] = useState(false);
+  const [savedList, setSavedList] = useState([]);
+  const [showSaveConfirm, setShowSaveConfirm] = useState(false);
+
+  const refreshSaved = useCallback(() => {
+    setSavedList(getSavedScenarios());
+  }, [getSavedScenarios]);
+
+  useEffect(() => { refreshSaved(); }, [refreshSaved]);
+
+  const handleSave = () => {
+    const name = saveName.trim() || `${clientName || "Scenario"} — ${new Date().toLocaleDateString("it-IT")}`;
+    saveScenario(name);
+    setSaveName("");
+    setShowSaveConfirm(true);
+    setTimeout(() => setShowSaveConfirm(false), 2000);
+    refreshSaved();
+  };
+
+  const handleLoad = (entry) => {
+    loadScenario(entry);
+    setShowSaved(false);
+  };
+
+  const handleDelete = (id) => {
+    deleteScenario(id);
+    refreshSaved();
+  };
+
   return (
     <div className="builder-fullscreen">
       {/* Left panel — input */}
@@ -1158,11 +1252,67 @@ function ScenarioBuilder({ prices, markup, setPrices, setMarkup }) {
             <div className="builder-brand-sub">Ellysse — Simulatore Costi</div>
           </div>
         </div>
-        <div className="builder-intro">
-          Descrivi lo scenario commerciale in linguaggio naturale.
-          L'AI analizza volumi, stagionalità, modelli e genera una stima strutturata.
+
+        {/* Client / Project fields */}
+        <div className="builder-client-row">
+          <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
+            <div className="form-label" style={{ fontSize: "10px", color: "rgba(255,255,255,0.4)" }}>Cliente</div>
+            <input className="form-input builder-input" placeholder="Nome cliente" value={clientName} onChange={e => setClientName(e.target.value)} />
+          </div>
+          <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
+            <div className="form-label" style={{ fontSize: "10px", color: "rgba(255,255,255,0.4)" }}>Progetto</div>
+            <input className="form-input builder-input" placeholder="Nome progetto" value={projectName} onChange={e => setProjectName(e.target.value)} />
+          </div>
         </div>
+
         <AiAssistantInput prices={prices} markup={markup} />
+
+        {/* Save/Load section */}
+        <div className="builder-save-section">
+          {aiResult && (
+            <div className="builder-save-row">
+              <input
+                className="form-input builder-input"
+                placeholder="Nome scenario..."
+                value={saveName}
+                onChange={e => setSaveName(e.target.value)}
+                style={{ flex: 1, fontSize: "11px" }}
+              />
+              <button className="builder-btn-ghost" onClick={handleSave} style={{ whiteSpace: "nowrap" }}>
+                {showSaveConfirm ? "✓ Salvato!" : "💾 Salva"}
+              </button>
+            </div>
+          )}
+          <button
+            className="builder-btn-ghost"
+            style={{ width: "100%", fontSize: "11px", marginTop: "6px" }}
+            onClick={() => { setShowSaved(!showSaved); refreshSaved(); }}
+          >
+            {showSaved ? "▾ Chiudi scenari salvati" : `▸ Scenari salvati (${savedList.length})`}
+          </button>
+          {showSaved && savedList.length > 0 && (
+            <div className="builder-saved-list">
+              {savedList.map(entry => (
+                <div key={entry.id} className="builder-saved-item">
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="builder-saved-name">{entry.name}</div>
+                    <div className="builder-saved-meta">
+                      {entry.client && <span>{entry.client}</span>}
+                      {entry.project && <span> — {entry.project}</span>}
+                      <span> · {new Date(entry.date).toLocaleDateString("it-IT")}</span>
+                    </div>
+                  </div>
+                  <button className="builder-btn-ghost" style={{ padding: "3px 8px", fontSize: "10px" }} onClick={() => handleLoad(entry)}>Carica</button>
+                  <button className="builder-btn-ghost" style={{ padding: "3px 6px", fontSize: "10px", color: "#f87171" }} onClick={() => handleDelete(entry.id)}>✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+          {showSaved && savedList.length === 0 && (
+            <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.3)", textAlign: "center", padding: "12px 0" }}>Nessuno scenario salvato</div>
+          )}
+        </div>
+
         <div className="builder-panel-bottom">
           <PriceSettings prices={prices} setPrices={setPrices} />
           <MarkupBar markup={markup} setMarkup={setMarkup} />
@@ -1610,9 +1760,9 @@ export default function App() {
             </div>
             <div className="footer">
               <div style={{ maxWidth: "920px", margin: "0 auto" }}>
-                <span className="mono" style={{ fontSize: "11px" }}>ELLYSSE</span> — Simulatore Costi AI &middot; Prezzi aggiornati a marzo 2026
+                <span className="mono" style={{ fontSize: "11px" }}>ELLYSSE</span> — Simulatore Costi AI &middot; Prezzi in EUR (cambio 1€ = 1,15$) &middot; Aprile 2026
                 <br />
-                <span style={{ fontSize: "11px", opacity: 0.7 }}>I costi sono stime basate sui listini pubblici. Free tier e sconti volume non inclusi.</span>
+                <span style={{ fontSize: "11px", opacity: 0.7 }}>Stime basate sui listini pubblici convertiti in EUR. Free tier e sconti volume non inclusi.</span>
               </div>
             </div>
           </>

@@ -1386,8 +1386,126 @@ body {
   }
 }
 
+/* ── Client / Project row ── */
+.builder-client-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+/* ── Save / Load section ── */
+.builder-save-section {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+.builder-save-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.builder-saved-list {
+  margin-top: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.builder-saved-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+.builder-saved-item:hover {
+  background: rgba(255,255,255,0.08);
+}
+.builder-saved-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.85);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.builder-saved-meta {
+  font-size: 10px;
+  color: rgba(255,255,255,0.35);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Print-only branded header ── */
+.print-header {
+  display: none;
+}
+
 /* ── Print adjustments for builder ── */
 @media print {
+  .print-header {
+    display: block !important;
+    margin-bottom: 1.5rem;
+    padding-bottom: 1rem;
+  }
+  .print-header-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .print-header-logo {
+    font-size: 20px;
+    color: var(--orange);
+  }
+  .print-header-company {
+    font-family: 'Space Mono', 'JetBrains Mono', monospace;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--navy);
+    letter-spacing: 2px;
+  }
+  .print-header-divider {
+    color: var(--pale-navy);
+    font-size: 18px;
+    font-weight: 300;
+  }
+  .print-header-tool {
+    font-size: 13px;
+    color: var(--text-mid);
+  }
+  .print-header-meta {
+    margin-top: 4px;
+  }
+  .print-header-client {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--navy);
+    line-height: 1.3;
+  }
+  .print-header-project {
+    font-size: 14px;
+    color: var(--text-mid);
+    margin-top: 2px;
+  }
+  .print-header-date {
+    font-size: 11px;
+    color: var(--text-light);
+    margin-top: 4px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .print-header-line {
+    height: 2px;
+    background: linear-gradient(90deg, var(--navy) 0%, var(--orange) 50%, transparent 100%);
+    margin-top: 12px;
+    border-radius: 1px;
+  }
+
   .builder-fullscreen {
     display: block;
   }
@@ -1396,11 +1514,29 @@ body {
   }
   .builder-panel-right {
     padding: 1rem;
+    background: white;
   }
   .builder-mode-switcher {
     display: none !important;
   }
   .builder-results .ai-grand-total {
     break-inside: avoid;
+  }
+  .builder-results .ai-scenario-card {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* Print footer */
+  .builder-results::after {
+    content: "Documento generato da Ellysse — Simulatore Costi AI · Prezzi in EUR (cambio 1€ = 1,15$) · Aprile 2026 · Stime basate su listini pubblici, free tier e sconti volume non inclusi.";
+    display: block;
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--pale-navy);
+    font-size: 9px;
+    color: var(--text-light);
+    text-align: center;
+    font-family: 'JetBrains Mono', monospace;
   }
 }
