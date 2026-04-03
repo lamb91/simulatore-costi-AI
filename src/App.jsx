@@ -478,14 +478,38 @@ Se generi bassa stagione (7 mesi) + alta stagione (5 mesi), NON aggiungere un te
 === REGOLA 4: CONFRONTI TTS ===
 Se l'utente chiede confronto TTS (es. WaveNet vs Chirp 3), duplica TUTTI gli scenari per ogni modello TTS, comprese le sotto-divisioni per entità.
 
+=== REGOLA 5: VARIANT = SOLO LA COMBINAZIONE ALTERNATIVA, MAI IL PERIODO ===
+CRUCIALE: il campo "variant" identifica SOLO la combinazione alternativa (livello automazione × modello TTS), NON il periodo temporale.
+Scenari di periodi diversi (bassa stagione + alta stagione) che appartengono alla STESSA alternativa DEVONO avere lo STESSO identico valore "variant".
+Il frontend somma automaticamente i costi degli scenari con lo stesso variant per ottenere il totale annuale.
+
+ESEMPIO CORRETTO per confronto WaveNet vs Chirp 3 con bassa/alta stagione:
+  - Bassa stagione WaveNet → variant: "wavenet"
+  - Alta stagione WaveNet  → variant: "wavenet"   (STESSO variant!)
+  - Bassa stagione Chirp 3 → variant: "chirp3"
+  - Alta stagione Chirp 3  → variant: "chirp3"     (STESSO variant!)
+Risultato: 2 alternative, ognuna con totale annuale = bassa + alta.
+
+ESEMPIO SBAGLIATO (NON fare così):
+  - variant: "bassa_wavenet", "alta_wavenet", "bassa_chirp3", "alta_chirp3"
+  Questo creerebbe 4 alternative con totali parziali, SBAGLIATO.
+
+Se ci sono anche livelli di automazione diversi (es. prudente 60% + ottimista 70%), allora:
+  - Bassa prudente WaveNet → variant: "prudente_wavenet"
+  - Alta prudente WaveNet  → variant: "prudente_wavenet"  (STESSO!)
+  - Bassa prudente Chirp 3 → variant: "prudente_chirp3"
+  - Alta prudente Chirp 3  → variant: "prudente_chirp3"   (STESSO!)
+  - Bassa ottimista WaveNet → variant: "ottimista_wavenet"
+  - etc.
+
 RISPONDI SOLO con JSON valido, nessun testo prima o dopo:
 {
   "summary": "Riepilogo in italiano (2-3 frasi). Specifica: gli scenari per_entita sono suddivisione degli aggregati e NON vanno sommati. Ogni combinazione (variant) è un'alternativa.",
   "scenarios": [
     {
       "group": "aggregato",
-      "variant": "prudente_wavenet",
-      "label": "Bassa stagione - Prudente - WaveNet",
+      "variant": "wavenet",
+      "label": "Bassa stagione - WaveNet",
       "period": "7 mesi bassa stagione",
       "periodMonths": 7,
       "conversations": 60000,
@@ -499,6 +523,24 @@ RISPONDI SOLO con JSON valido, nessun testo prima o dopo:
       "avgTtsChars": 200,
       "pctWithTts": 100,
       "note": "60.000 = 100.000 informative × 60% automazione"
+    },
+    {
+      "group": "aggregato",
+      "variant": "wavenet",
+      "label": "Alta stagione - WaveNet",
+      "period": "5 mesi alta stagione",
+      "periodMonths": 5,
+      "conversations": 120000,
+      "avgDurationSec": 120,
+      "turnsPerConv": 4,
+      "asrModel": "google_asr_standard",
+      "ttsModel": "google_tts_wavenet",
+      "llmModel": "gemini_flash",
+      "avgInputTokens": 350,
+      "avgOutputTokens": 200,
+      "avgTtsChars": 200,
+      "pctWithTts": 100,
+      "note": "120.000 = 200.000 informative × 60% automazione"
     }
   ]
 }`;
