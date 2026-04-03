@@ -1,5 +1,28 @@
-import { useState, useMemo, useCallback, useRef, useEffect } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect, createContext, useContext } from "react";
 import "./App.css";
+
+// ─── Shared AI state context (connects split input/results panels) ───
+const AiContext = createContext(null);
+
+function AiProvider({ children }) {
+  const [apiKey, setApiKey] = useState(() => {
+    try { return window.localStorage.getItem("ellysse_ai_key") || ""; } catch { return ""; }
+  });
+  const [prompt, setPrompt] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [aiResult, setAiResult] = useState(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    try { if (apiKey) window.localStorage.setItem("ellysse_ai_key", apiKey); } catch {}
+  }, [apiKey]);
+
+  return (
+    <AiContext.Provider value={{ apiKey, setApiKey, prompt, setPrompt, loading, setLoading, aiResult, setAiResult, error, setError }}>
+      {children}
+    </AiContext.Provider>
+  );
+}
 
 // ─── Formatting helpers ───
 const fmt = (n) => (typeof n === "number" ? n.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : n);
@@ -62,53 +85,6 @@ const LLM_MODELS = {
   gpt41: "GPT-4.1",
 };
 
-// ─── Profiles for quick mode ───
-const PROFILES = [
-  {
-    id: "voicebot-eco",
-    name: "Voicebot Economico",
-    desc: "Voicebot con STT Google standard, TTS Google WaveNet e Gemini Flash. Ideale per volumi alti dove il costo è prioritario.",
-    config: {
-      conversations: 10000, avgDurationSec: 120, turnsPerConv: 4,
-      asrModel: "google_asr_standard", ttsModel: "google_tts_wavenet", llmModel: "gemini_flash",
-      avgInputTokens: 350, avgOutputTokens: 200, avgTtsChars: 200, pctWithTts: 100,
-    },
-    specs: ["STT Standard", "TTS WaveNet", "Gemini Flash", "~2min/conv"],
-  },
-  {
-    id: "voicebot-premium",
-    name: "Voicebot Premium",
-    desc: "Voicebot con STT Enhanced, TTS ElevenLabs Flash 2.5 e GPT-4.1. Per esperienze vocali di qualità superiore.",
-    config: {
-      conversations: 10000, avgDurationSec: 120, turnsPerConv: 4,
-      asrModel: "google_asr_enhanced", ttsModel: "elevenlabs_flash_25", llmModel: "gpt41",
-      avgInputTokens: 400, avgOutputTokens: 200, avgTtsChars: 150, pctWithTts: 100,
-    },
-    specs: ["STT Enhanced", "ElevenLabs Flash", "GPT-4.1", "~120s/conv"],
-  },
-  {
-    id: "chatbot",
-    name: "Chatbot Testuale",
-    desc: "Chatbot senza ASR/TTS — solo LLM. Perfetto per chat web, WhatsApp, o canali testuali.",
-    config: {
-      conversations: 10000, avgDurationSec: 0, turnsPerConv: 5,
-      asrModel: "google_asr_standard", ttsModel: "google_tts_standard", llmModel: "gemini_flash",
-      avgInputTokens: 350, avgOutputTokens: 200, avgTtsChars: 0, pctWithTts: 0,
-    },
-    specs: ["Solo LLM", "Gemini Flash", "No ASR/TTS", "~5 turni"],
-  },
-  {
-    id: "voicebot-elevenlabs-hd",
-    name: "Voicebot HD",
-    desc: "Massima qualità vocale con ElevenLabs Multilingual v2 e Gemini Flash. Ideale per demo e use case ad alto impatto.",
-    config: {
-      conversations: 5000, avgDurationSec: 120, turnsPerConv: 4,
-      asrModel: "google_asr_enhanced", ttsModel: "elevenlabs_multi_v2", llmModel: "gemini_flash",
-      avgInputTokens: 400, avgOutputTokens: 200, avgTtsChars: 150, pctWithTts: 100,
-    },
-    specs: ["STT Enhanced", "ElevenLabs v2", "Gemini Flash", "~120s/conv"],
-  },
-];
 
 // ─── Default compare configurations ───
 const DEFAULT_COMPARE_CONFIGS = [
@@ -452,64 +428,6 @@ function MarkupBar({ markup, setMarkup }) {
   );
 }
 
-// ─── Quick Mode ───
-function QuickMode({ prices, markup }) {
-  const [selectedProfile, setSelectedProfile] = useState("voicebot-eco");
-  const [conversations, setConversations] = useState(10000);
-
-  const profile = PROFILES.find((p) => p.id === selectedProfile);
-  const config = useMemo(() => ({ ...profile.config, conversations }), [profile, conversations]);
-  const results = useMemo(() => calcCosts(config, prices), [config, prices]);
-
-  return (
-    <>
-      <div className="section">
-        <div className="section-title">Seleziona un profilo</div>
-        <div className="section-desc">Scegli il tipo di soluzione per ottenere una stima rapida dei costi.</div>
-        <div className="grid-2" style={{ marginBottom: "1.5rem" }}>
-          {PROFILES.map((p) => (
-            <div
-              key={p.id}
-              className={`profile-card ${selectedProfile === p.id ? "selected" : ""}`}
-              onClick={() => { setSelectedProfile(p.id); setConversations(p.config.conversations); }}
-            >
-              <div className="profile-name">{p.name}</div>
-              <div className="profile-desc">{p.desc}</div>
-              <div className="profile-specs">
-                {p.specs.map((s, i) => (<span key={i} className="profile-spec">{s}</span>))}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="section">
-        <div className="form-group">
-          <div className="form-label">Conversazioni al mese</div>
-          <div className="slider-row">
-            <input
-              className="slider"
-              type="range"
-              min={500}
-              max={200000}
-              step={500}
-              value={conversations}
-              onChange={(e) => setConversations(Number(e.target.value))}
-            />
-            <span className="slider-val">{fmtInt(conversations)}</span>
-          </div>
-          <div className="form-hint">Trascina per regolare il volume mensile</div>
-        </div>
-      </div>
-
-      <ResultPanel results={results} config={config} markup={markup} />
-
-      <div className="callout" style={{ marginTop: "1rem" }}>
-        <strong>Profilo: {profile.name}</strong> — {profile.desc}
-      </div>
-    </>
-  );
-}
 
 // ─── AI System Prompt ───
 const AI_SYSTEM_PROMPT = `Sei un esperto di AI conversazionale di Ellysse. Analizzi scenari commerciali in linguaggio naturale e li trasformi in scenari strutturati JSON per il simulatore costi.
@@ -585,22 +503,10 @@ RISPONDI SOLO con JSON valido, nessun testo prima o dopo:
   ]
 }`;
 
-// ─── AI Assistant Component ───
-function AiAssistant({ prices, markup, onLoadScenario }) {
-  const [apiKey, setApiKey] = useState(() => {
-    try { return window.localStorage.getItem("ellysse_ai_key") || ""; } catch { return ""; }
-  });
+// ─── AI Assistant Input Component (left panel) ───
+function AiAssistantInput({ prices, markup }) {
+  const { apiKey, setApiKey, prompt, setPrompt, loading, setLoading, aiResult, setAiResult, error, setError } = useContext(AiContext);
   const [keyVisible, setKeyVisible] = useState(false);
-  const [prompt, setPrompt] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [aiResult, setAiResult] = useState(null);
-  const [error, setError] = useState("");
-  const resultRef = useRef(null);
-
-  // persist key
-  useEffect(() => {
-    try { if (apiKey) window.localStorage.setItem("ellysse_ai_key", apiKey); } catch {}
-  }, [apiKey]);
 
   const analyze = async () => {
     if (!prompt.trim() || !apiKey.trim()) return;
@@ -719,7 +625,6 @@ function AiAssistant({ prices, markup, onLoadScenario }) {
       const grandTotalMonthlyMax = hasVariants ? Math.max(...variantMonthlies) : grandTotalMonthly;
 
       setAiResult({ summary: parsed.summary, scenarios: withCosts, groups, groupTotals, hasMultipleGroups, variants, variantTotals, hasVariants, grandTotal, grandTotalMax, grandTotalMonthly, grandTotalMonthlyMax });
-      setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 200);
     } catch (err) {
       if (err instanceof SyntaxError) {
         setError("L'AI ha risposto in un formato non valido. Riprova.");
@@ -737,22 +642,14 @@ function AiAssistant({ prices, markup, onLoadScenario }) {
   ];
 
   return (
-    <div className="ai-assistant">
-      <div className="ai-assistant-header">
-        <div className="ai-assistant-icon">✦</div>
-        <div>
-          <div className="ai-assistant-title">Assistente AI</div>
-          <div className="ai-assistant-subtitle">Descrivi lo scenario in linguaggio naturale — l'AI compilerà tutto per te</div>
-        </div>
-      </div>
-
+    <div className="builder-input-area">
       {/* API Key */}
-      <div className="ai-key-row">
+      <div className="builder-key-row">
         <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
-          <div className="form-label" style={{ fontSize: "11px" }}>API Key OpenRouter</div>
+          <div className="form-label" style={{ fontSize: "11px", color: "rgba(255,255,255,0.5)" }}>API Key OpenRouter</div>
           <div style={{ display: "flex", gap: "6px" }}>
             <input
-              className="form-input"
+              className="form-input builder-input"
               type={keyVisible ? "text" : "password"}
               placeholder="sk-or-..."
               value={apiKey}
@@ -760,8 +657,7 @@ function AiAssistant({ prices, markup, onLoadScenario }) {
               style={{ fontSize: "12px" }}
             />
             <button
-              className="btn-outline"
-              style={{ padding: "6px 10px", fontSize: "11px", flexShrink: 0 }}
+              className="builder-btn-ghost"
               onClick={() => setKeyVisible(!keyVisible)}
             >
               {keyVisible ? "Nascondi" : "Mostra"}
@@ -771,12 +667,12 @@ function AiAssistant({ prices, markup, onLoadScenario }) {
       </div>
 
       {/* Textarea */}
-      <div className="form-group" style={{ marginBottom: "10px" }}>
-        <div className="form-label">Descrivi lo scenario</div>
+      <div className="form-group" style={{ marginBottom: "10px", flex: 1 }}>
+        <div className="form-label" style={{ color: "rgba(255,255,255,0.6)", fontSize: "11px" }}>Descrivi lo scenario</div>
         <textarea
-          className="ai-textarea"
-          rows={6}
-          placeholder={"Incolla qui la descrizione dello scenario commerciale...\n\nEsempio: 45.000 chiamate/mese, 35% informative in bassa stagione (7 mesi), 90% in alta stagione (5 mesi). Il bot gestisce il 60% in autonomia (scenario prudente) o 70% (ottimista). Confronta WaveNet vs Chirp 3. Suddividi per parco: Cattolica 103.457, Cway 182.922, ..."}
+          className="builder-textarea"
+          rows={8}
+          placeholder={"Incolla qui la descrizione dello scenario commerciale...\n\nEsempio: 45.000 chiamate/mese, 35% informative in bassa stagione (7 mesi), 90% in alta stagione (5 mesi). Il bot gestisce il 60%..."}
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           disabled={loading}
@@ -785,20 +681,20 @@ function AiAssistant({ prices, markup, onLoadScenario }) {
 
       {/* Example chips */}
       {!prompt && (
-        <div className="ai-examples">
-          <span style={{ fontSize: "11px", color: "var(--text-light)", marginRight: "4px" }}>Esempi:</span>
+        <div className="builder-examples">
+          <span style={{ fontSize: "10px", color: "rgba(255,255,255,0.35)", marginRight: "4px" }}>Esempi:</span>
           {examplePrompts.map((ex, i) => (
-            <button key={i} className="ai-example-chip" onClick={() => setPrompt(ex)}>
-              {ex.slice(0, 60)}…
+            <button key={i} className="builder-example-chip" onClick={() => setPrompt(ex)}>
+              {ex.slice(0, 50)}…
             </button>
           ))}
         </div>
       )}
 
       {/* Analyze button */}
-      <div style={{ display: "flex", gap: "8px", alignItems: "center", marginTop: "10px" }}>
+      <div style={{ display: "flex", gap: "8px", alignItems: "center", marginTop: "12px" }}>
         <button
-          className="btn-primary ai-analyze-btn"
+          className="builder-analyze-btn"
           onClick={analyze}
           disabled={loading || !prompt.trim() || !apiKey.trim()}
           style={{ opacity: loading || !prompt.trim() || !apiKey.trim() ? 0.5 : 1 }}
@@ -810,18 +706,65 @@ function AiAssistant({ prices, markup, onLoadScenario }) {
           )}
         </button>
         {aiResult && (
-          <button className="btn-outline" style={{ fontSize: "12px", padding: "8px 14px" }} onClick={() => { setAiResult(null); setPrompt(""); }}>
+          <button className="builder-btn-ghost" onClick={() => { setAiResult(null); setPrompt(""); }}>
             ↺ Nuova analisi
           </button>
         )}
       </div>
 
       {/* Error */}
-      {error && <div className="ai-error">{error}</div>}
+      {error && <div className="ai-error" style={{ marginTop: "10px" }}>{error}</div>}
+    </div>
+  );
+}
 
-      {/* Results */}
-      {aiResult && (
-        <div className="ai-results" ref={resultRef}>
+// ─── AI Assistant Results Component (right panel) ───
+function AiAssistantResults({ prices, markup }) {
+  const { aiResult, loading } = useContext(AiContext);
+  const resultRef = useRef(null);
+
+  if (loading) {
+    return (
+      <div className="builder-empty-state">
+        <div className="builder-empty-spinner" />
+        <div className="builder-empty-title">Analisi in corso...</div>
+        <div className="builder-empty-sub">L'AI sta elaborando lo scenario</div>
+      </div>
+    );
+  }
+
+  if (!aiResult) {
+    return (
+      <div className="builder-empty-state">
+        <div className="builder-empty-icon">✦</div>
+        <div className="builder-empty-title">Nessun risultato</div>
+        <div className="builder-empty-sub">
+          Descrivi uno scenario nel pannello a sinistra e clicca "Analizza con AI" per generare la stima dei costi.
+        </div>
+        <div className="builder-empty-features">
+          <div className="builder-feature-item">
+            <span className="builder-feature-icon">📊</span>
+            <span>Breakdown ASR / TTS / LLM</span>
+          </div>
+          <div className="builder-feature-item">
+            <span className="builder-feature-icon">🔄</span>
+            <span>Confronto varianti automatico</span>
+          </div>
+          <div className="builder-feature-item">
+            <span className="builder-feature-icon">🏢</span>
+            <span>Suddivisione per entità</span>
+          </div>
+          <div className="builder-feature-item">
+            <span className="builder-feature-icon">📄</span>
+            <span>Esporta / Stampa PDF</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="builder-results" ref={resultRef}>
           {/* Summary */}
           <div className="ai-summary">
             <div className="ai-summary-label">Interpretazione AI</div>
@@ -1128,23 +1071,58 @@ function AiAssistant({ prices, markup, onLoadScenario }) {
             </button>
           </div>
         </div>
+  );
+}
+
+// ─── Legacy AI Assistant (wraps both input + results in one, used by AdvancedMode) ───
+function AiAssistant({ prices, markup, onLoadScenario }) {
+  const { aiResult } = useContext(AiContext);
+  return (
+    <div className="ai-assistant">
+      <div className="ai-assistant-header">
+        <div className="ai-assistant-icon">✦</div>
+        <div>
+          <div className="ai-assistant-title">Assistente AI</div>
+          <div className="ai-assistant-subtitle">Descrivi lo scenario in linguaggio naturale</div>
+        </div>
+      </div>
+      <AiAssistantInput prices={prices} markup={markup} />
+      {aiResult && (
+        <div className="ai-results" style={{ marginTop: "1.5rem" }}>
+          <AiAssistantResults prices={prices} markup={markup} />
+        </div>
       )}
     </div>
   );
 }
 
-// ─── Scenario Builder (primary tab, wraps AI Assistant) ───
-function ScenarioBuilder({ prices, markup }) {
+// ─── Scenario Builder (primary tab, full-screen AI experience) ───
+function ScenarioBuilder({ prices, markup, setPrices, setMarkup }) {
   return (
-    <div>
-      <div style={{ marginBottom: "20px" }}>
-        <h2 style={{ fontSize: "20px", color: "var(--navy)", marginBottom: "6px" }}>Scenario Builder AI</h2>
-        <p style={{ fontSize: "13px", color: "var(--text-mid)", lineHeight: 1.5, margin: 0 }}>
-          Descrivi lo scenario commerciale in linguaggio naturale. L'AI analizzerà automaticamente volumi, stagionalità,
-          livelli di automazione e modelli TTS/LLM per generare una stima strutturata con breakdown per entità e confronto alternative.
-        </p>
+    <div className="builder-fullscreen">
+      {/* Left panel — input */}
+      <div className="builder-panel-left">
+        <div className="builder-brand">
+          <div className="builder-brand-icon">✦</div>
+          <div>
+            <div className="builder-brand-name">Scenario Builder AI</div>
+            <div className="builder-brand-sub">Ellysse — Simulatore Costi</div>
+          </div>
+        </div>
+        <div className="builder-intro">
+          Descrivi lo scenario commerciale in linguaggio naturale.
+          L'AI analizza volumi, stagionalità, modelli e genera una stima strutturata.
+        </div>
+        <AiAssistantInput prices={prices} markup={markup} />
+        <div className="builder-panel-bottom">
+          <PriceSettings prices={prices} setPrices={setPrices} />
+          <MarkupBar markup={markup} setMarkup={setMarkup} />
+        </div>
       </div>
-      <AiAssistant prices={prices} markup={markup} onLoadScenario={null} />
+      {/* Right panel — results */}
+      <div className="builder-panel-right">
+        <AiAssistantResults prices={prices} markup={markup} />
+      </div>
     </div>
   );
 }
@@ -1543,59 +1521,54 @@ export default function App() {
   const [markup, setMarkup] = useState(30);
 
   return (
-    <div>
-      {/* HERO */}
-      <div className="hero">
-        <div className="hero-inner">
-          <div className="hero-tag">ELLYSSE — SIMULATORE COSTI AI</div>
-          <h1>Simulatore costi AI</h1>
-          <p className="hero-sub">
-            Strumento interattivo per stimare i costi di ASR, TTS e LLM nei progetti di AI conversazionale.
-            Pensato per i commerciali di Ellysse e per la preparazione di capitolati tecnici.
-          </p>
-        </div>
+    <AiProvider>
+      <div className={mode === "builder" ? "app-fullscreen" : ""}>
+        {/* Full-screen builder mode */}
+        {mode === "builder" && (
+          <>
+            <ScenarioBuilder prices={prices} markup={markup} setPrices={setPrices} setMarkup={setMarkup} />
+            <div className="builder-mode-switcher no-print">
+              <button className="builder-mode-btn active">✦ Builder</button>
+              <button className="builder-mode-btn" onClick={() => setMode("advanced")}>Dettagliata</button>
+              <button className="builder-mode-btn" onClick={() => setMode("compare")}>Confronto</button>
+            </div>
+          </>
+        )}
+
+        {/* Classic layout for other modes */}
+        {mode !== "builder" && (
+          <>
+            <div className="hero">
+              <div className="hero-inner">
+                <div className="hero-tag">ELLYSSE — SIMULATORE COSTI AI</div>
+                <h1>Simulatore costi AI</h1>
+                <p className="hero-sub">
+                  Strumento interattivo per stimare i costi di ASR, TTS e LLM nei progetti di AI conversazionale.
+                </p>
+              </div>
+            </div>
+            <div className="main-wrap">
+              <div className="mode-tabs no-print">
+                <button className="mode-tab" onClick={() => setMode("builder")}>✦ Scenario Builder AI</button>
+                <button className={`mode-tab ${mode === "advanced" ? "active" : ""}`} onClick={() => setMode("advanced")}>Simulazione dettagliata</button>
+                <button className={`mode-tab ${mode === "compare" ? "active" : ""}`} onClick={() => setMode("compare")}>Confronto modelli</button>
+              </div>
+              <PriceSettings prices={prices} setPrices={setPrices} />
+              <MarkupBar markup={markup} setMarkup={setMarkup} />
+              <div className="divider" />
+              {mode === "advanced" && <AdvancedMode prices={prices} markup={markup} />}
+              {mode === "compare" && <CompareMode prices={prices} markup={markup} />}
+            </div>
+            <div className="footer">
+              <div style={{ maxWidth: "920px", margin: "0 auto" }}>
+                <span className="mono" style={{ fontSize: "11px" }}>ELLYSSE</span> — Simulatore Costi AI &middot; Prezzi aggiornati a marzo 2026
+                <br />
+                <span style={{ fontSize: "11px", opacity: 0.7 }}>I costi sono stime basate sui listini pubblici. Free tier e sconti volume non inclusi.</span>
+              </div>
+            </div>
+          </>
+        )}
       </div>
-
-      <div className="main-wrap">
-        {/* Mode tabs */}
-        <div className="mode-tabs no-print">
-          <button className={`mode-tab ${mode === "builder" ? "active" : ""}`} onClick={() => setMode("builder")}>
-            ✦ Scenario Builder AI
-          </button>
-          <button className={`mode-tab ${mode === "quick" ? "active" : ""}`} onClick={() => setMode("quick")}>
-            Stima rapida
-          </button>
-          <button className={`mode-tab ${mode === "advanced" ? "active" : ""}`} onClick={() => setMode("advanced")}>
-            Simulazione dettagliata
-          </button>
-          <button className={`mode-tab ${mode === "compare" ? "active" : ""}`} onClick={() => setMode("compare")}>
-            Confronto modelli
-          </button>
-        </div>
-
-        {/* Price settings */}
-        <PriceSettings prices={prices} setPrices={setPrices} />
-
-        {/* Markup / Ricarico bar */}
-        <MarkupBar markup={markup} setMarkup={setMarkup} />
-
-        <div className="divider" />
-
-        {/* Content */}
-        {mode === "builder" && <ScenarioBuilder prices={prices} markup={markup} />}
-        {mode === "quick" && <QuickMode prices={prices} markup={markup} />}
-        {mode === "advanced" && <AdvancedMode prices={prices} markup={markup} />}
-        {mode === "compare" && <CompareMode prices={prices} markup={markup} />}
-      </div>
-
-      {/* FOOTER */}
-      <div className="footer">
-        <div style={{ maxWidth: "920px", margin: "0 auto" }}>
-          <span className="mono" style={{ fontSize: "11px" }}>ELLYSSE</span> — Simulatore Costi AI &middot; Prezzi aggiornati a marzo 2026
-          <br />
-          <span style={{ fontSize: "11px", opacity: 0.7 }}>I costi sono stime basate sui listini pubblici. Free tier e sconti volume non inclusi.</span>
-        </div>
-      </div>
-    </div>
+    </AiProvider>
   );
 }
