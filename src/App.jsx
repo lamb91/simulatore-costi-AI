@@ -746,17 +746,16 @@ function AiAssistant({ prices, markup, onLoadScenario }) {
       const variantKeys = Object.keys(variants);
       const hasVariants = variantKeys.length > 1;
 
-      // Calculate per-variant annual totals (sum periods within same variant)
+      // Calculate per-variant totals: sum costs and periods within same variant
       const variantTotals = {};
       for (const [v, vScenarios] of Object.entries(variants)) {
         const total = vScenarios.reduce((acc, s) => acc + s.results.totalCost, 0);
-        const monthly = vScenarios.reduce((acc, s) => {
-          const pm = s._config.periodMonths || 1;
-          return acc + s.results.totalCost / pm;
-        }, 0);
+        const totalMonths = vScenarios.reduce((acc, s) => acc + (s._config.periodMonths || 1), 0);
+        const monthly = totalMonths > 0 ? total / totalMonths : total;
+        const totalConv = vScenarios.reduce((acc, s) => acc + (s._config.conversations || 0), 0);
         // Build a readable label from variant key
         const label = v.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-        variantTotals[v] = { total, monthly, count: vScenarios.length, label };
+        variantTotals[v] = { total, monthly, totalMonths, totalConv, count: vScenarios.length, label };
       }
 
       // Grand total: if variants exist, show range (min-max), else sum all
@@ -877,96 +876,103 @@ function AiAssistant({ prices, markup, onLoadScenario }) {
             <div className="ai-summary-text">{aiResult.summary}</div>
           </div>
 
-          {/* Grand total */}
-          <div className="ai-grand-total">
-            <div>
-              <div style={{ fontSize: "12px", color: "var(--text-mid)", marginBottom: "2px" }}>
-                {aiResult.hasVariants
-                  ? "Range costo API annuale — scenari alternativi"
-                  : aiResult.hasMultipleGroups
+          {/* Grand total or variant range */}
+          {aiResult.hasVariants ? (
+            <>
+              {/* Range header */}
+              <div className="ai-grand-total">
+                <div>
+                  <div style={{ fontSize: "12px", color: "var(--text-mid)", marginBottom: "2px" }}>
+                    Ogni combinazione (automazione × modello TTS) rappresenta un'alternativa di costo
+                  </div>
+                  <div style={{ fontSize: "28px", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: "var(--navy)" }}>
+                    da {fmtEur(aiResult.grandTotal)} a {fmtEur(aiResult.grandTotalMax)}
+                    <span style={{ fontSize: "14px", fontWeight: 400, color: "var(--text-mid)" }}> / anno</span>
+                  </div>
+                  {markup > 0 && (
+                    <div style={{ fontSize: "14px", color: "var(--orange)", fontFamily: "'JetBrains Mono', monospace", marginTop: "2px" }}>
+                      Vendita: da {fmtEur(aiResult.grandTotal * (1 + markup / 100))} a {fmtEur(aiResult.grandTotalMax * (1 + markup / 100))} (+{markup}%)
+                    </div>
+                  )}
+                  <div style={{ fontSize: "12px", color: "var(--text-light)", marginTop: "4px", fontFamily: "'JetBrains Mono', monospace" }}>
+                    Media mensile: da {fmtEur(aiResult.grandTotalMonthly)} a {fmtEur(aiResult.grandTotalMonthlyMax)}
+                  </div>
+                </div>
+                <div style={{ fontSize: "12px", color: "var(--text-light)" }}>
+                  {aiResult.scenarios.length} scenari generati<br/>
+                  {Object.keys(aiResult.variantTotals).length} alternative
+                </div>
+              </div>
+
+              {/* Variant comparison table */}
+              <div style={{
+                background: "white",
+                border: "1px solid var(--border)",
+                borderRadius: "10px",
+                padding: "16px",
+                marginBottom: "16px",
+              }}>
+                <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--navy)", marginBottom: "10px" }}>
+                  Riepilogo costi annuali per combinazione
+                </div>
+                <div style={{ fontSize: "11px", color: "var(--text-light)", marginBottom: "10px" }}>
+                  Ogni riga è una combinazione diversa di livello di automazione e modello TTS. Scegli la riga che corrisponde alla configurazione desiderata.
+                </div>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "2px solid var(--navy)" }}>
+                      <th style={{ textAlign: "left", padding: "6px 8px", color: "var(--navy)" }}>Combinazione</th>
+                      <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--navy)" }}>Conv. / anno</th>
+                      <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--navy)" }}>Costo annuale</th>
+                      <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--navy)" }}>Media / mese</th>
+                      {markup > 0 && <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--orange)" }}>Vendita anno</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(aiResult.variantTotals).map(([v, vt]) => {
+                      const isMin = vt.total === Math.min(...Object.values(aiResult.variantTotals).map(x => x.total));
+                      const isMax = vt.total === Math.max(...Object.values(aiResult.variantTotals).map(x => x.total));
+                      return (
+                        <tr key={v} style={{ borderBottom: "1px solid var(--border)", background: isMin ? "#f0fdf4" : isMax ? "#fef2f2" : "transparent" }}>
+                          <td style={{ padding: "8px", fontWeight: 600 }}>
+                            {vt.label}
+                            {isMin && <span style={{ marginLeft: "6px", fontSize: "10px", color: "#16a34a", fontWeight: 700 }}>PIU' BASSO</span>}
+                            {isMax && <span style={{ marginLeft: "6px", fontSize: "10px", color: "#dc2626", fontWeight: 700 }}>PIU' ALTO</span>}
+                          </td>
+                          <td style={{ textAlign: "right", padding: "8px", fontFamily: "'JetBrains Mono', monospace", color: "var(--text-mid)" }}>{fmtInt(vt.totalConv)}</td>
+                          <td style={{ textAlign: "right", padding: "8px", fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: "var(--navy)" }}>{fmtEur(vt.total)}</td>
+                          <td style={{ textAlign: "right", padding: "8px", fontFamily: "'JetBrains Mono', monospace" }}>{fmtEur(vt.monthly)}</td>
+                          {markup > 0 && <td style={{ textAlign: "right", padding: "8px", fontFamily: "'JetBrains Mono', monospace", color: "var(--orange)" }}>{fmtEur(vt.total * (1 + markup / 100))}</td>}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : (
+            <div className="ai-grand-total">
+              <div>
+                <div style={{ fontSize: "12px", color: "var(--text-mid)", marginBottom: "2px" }}>
+                  {aiResult.hasMultipleGroups
                     ? "Costo API totale — solo scenari aggregati (no dettaglio per entità)"
                     : "Costo API totale"}
+                </div>
+                <div style={{ fontSize: "28px", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: "var(--navy)" }}>
+                  {fmtEur(aiResult.grandTotal)}
+                </div>
+                {markup > 0 && (
+                  <div style={{ fontSize: "14px", color: "var(--orange)", fontFamily: "'JetBrains Mono', monospace", marginTop: "2px" }}>
+                    Vendita: {fmtEur(aiResult.grandTotal * (1 + markup / 100))} (+{markup}%)
+                  </div>
+                )}
+                <div style={{ fontSize: "12px", color: "var(--text-light)", marginTop: "4px", fontFamily: "'JetBrains Mono', monospace" }}>
+                  Media mensile stimata: {fmtEur(aiResult.grandTotalMonthly)} — Annualizzato: {fmtEur(aiResult.grandTotalMonthly * 12)}
+                </div>
               </div>
-              {aiResult.hasVariants ? (
-                <>
-                  <div style={{ fontSize: "28px", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: "var(--navy)" }}>
-                    {fmtEur(aiResult.grandTotal)} — {fmtEur(aiResult.grandTotalMax)}
-                  </div>
-                  {markup > 0 && (
-                    <div style={{ fontSize: "14px", color: "var(--orange)", fontFamily: "'JetBrains Mono', monospace", marginTop: "2px" }}>
-                      Vendita: {fmtEur(aiResult.grandTotal * (1 + markup / 100))} — {fmtEur(aiResult.grandTotalMax * (1 + markup / 100))} (+{markup}%)
-                    </div>
-                  )}
-                  <div style={{ fontSize: "12px", color: "var(--text-light)", marginTop: "4px", fontFamily: "'JetBrains Mono', monospace" }}>
-                    Mensile: {fmtEur(aiResult.grandTotalMonthly)} — {fmtEur(aiResult.grandTotalMonthlyMax)}
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div style={{ fontSize: "28px", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: "var(--navy)" }}>
-                    {fmtEur(aiResult.grandTotal)}
-                  </div>
-                  {markup > 0 && (
-                    <div style={{ fontSize: "14px", color: "var(--orange)", fontFamily: "'JetBrains Mono', monospace", marginTop: "2px" }}>
-                      Vendita: {fmtEur(aiResult.grandTotal * (1 + markup / 100))} (+{markup}%)
-                    </div>
-                  )}
-                  <div style={{ fontSize: "12px", color: "var(--text-light)", marginTop: "4px", fontFamily: "'JetBrains Mono', monospace" }}>
-                    Media mensile stimata: {fmtEur(aiResult.grandTotalMonthly)} — Annualizzato: {fmtEur(aiResult.grandTotalMonthly * 12)}
-                  </div>
-                </>
-              )}
-            </div>
-            <div style={{ fontSize: "12px", color: "var(--text-light)" }}>
-              {aiResult.scenarios.length} scenari generati
-            </div>
-          </div>
-
-          {/* Variant comparison table */}
-          {aiResult.hasVariants && aiResult.variantTotals && (
-            <div style={{
-              background: "white",
-              border: "1px solid var(--border)",
-              borderRadius: "10px",
-              padding: "16px",
-              marginBottom: "16px",
-            }}>
-              <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--navy)", marginBottom: "10px" }}>
-                Confronto scenari alternativi
+              <div style={{ fontSize: "12px", color: "var(--text-light)" }}>
+                {aiResult.scenarios.length} scenari generati
               </div>
-              <div style={{ fontSize: "11px", color: "var(--text-light)", marginBottom: "10px" }}>
-                Ogni riga rappresenta una combinazione alternativa. Scegli UNA riga come riferimento per il costo.
-              </div>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
-                <thead>
-                  <tr style={{ borderBottom: "2px solid var(--navy)" }}>
-                    <th style={{ textAlign: "left", padding: "6px 8px", color: "var(--navy)" }}>Scenario</th>
-                    <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--navy)" }}>Costo periodo</th>
-                    <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--navy)" }}>/ mese</th>
-                    <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--navy)" }}>Annualizzato</th>
-                    {markup > 0 && <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--orange)" }}>Vendita anno</th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(aiResult.variantTotals).map(([v, vt], idx) => {
-                    const isMin = vt.total === Math.min(...Object.values(aiResult.variantTotals).map(x => x.total));
-                    const isMax = vt.total === Math.max(...Object.values(aiResult.variantTotals).map(x => x.total));
-                    return (
-                      <tr key={v} style={{ borderBottom: "1px solid var(--border)", background: isMin ? "#f0fdf4" : isMax ? "#fef2f2" : "transparent" }}>
-                        <td style={{ padding: "8px", fontWeight: 600 }}>
-                          {vt.label}
-                          {isMin && <span style={{ marginLeft: "6px", fontSize: "10px", color: "#16a34a" }}>MIN</span>}
-                          {isMax && <span style={{ marginLeft: "6px", fontSize: "10px", color: "#dc2626" }}>MAX</span>}
-                        </td>
-                        <td style={{ textAlign: "right", padding: "8px", fontFamily: "'JetBrains Mono', monospace" }}>{fmtEur(vt.total)}</td>
-                        <td style={{ textAlign: "right", padding: "8px", fontFamily: "'JetBrains Mono', monospace" }}>{fmtEur(vt.monthly)}</td>
-                        <td style={{ textAlign: "right", padding: "8px", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{fmtEur(vt.monthly * 12)}</td>
-                        {markup > 0 && <td style={{ textAlign: "right", padding: "8px", fontFamily: "'JetBrains Mono', monospace", color: "var(--orange)" }}>{fmtEur(vt.monthly * 12 * (1 + markup / 100))}</td>}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
             </div>
           )}
 
