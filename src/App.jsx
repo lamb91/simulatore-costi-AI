@@ -557,9 +557,15 @@ Se ci sono anche livelli di automazione diversi (es. prudente 60% + ottimista 70
   - Bassa ottimista WaveNet → variant: "ottimista_wavenet"
   - etc.
 
+=== REGOLA 6: TRAFFICO TOTALE ANNUALE ===
+OBBLIGATORIO: nel JSON di risposta, includi SEMPRE il campo "total_annual_traffic" con il numero TOTALE di chiamate/conversazioni annuali PRIMA di qualsiasi filtro (informative, automazione). Questo è il volume grezzo lordo dell'azienda.
+Esempio: se il cliente ha 45.000 chiamate/mese → total_annual_traffic = 540.000.
+Se fornisce volumi per entità (es. 103.457 + 182.922 + ...) → total_annual_traffic = somma di tutti.
+
 RISPONDI SOLO con JSON valido, nessun testo prima o dopo:
 {
   "summary": "Riepilogo in italiano (2-3 frasi). Specifica: gli scenari per_entita sono suddivisione degli aggregati e NON vanno sommati. Ogni combinazione (variant) è un'alternativa.",
+  "total_annual_traffic": 543746,
   "scenarios": [
     {
       "group": "aggregato",
@@ -727,7 +733,8 @@ function AiAssistantInput({ prices, markup }) {
       const grandTotalMonthly = hasVariants ? Math.min(...variantMonthlies) : variantMonthlies.reduce((a, b) => a + b, 0);
       const grandTotalMonthlyMax = hasVariants ? Math.max(...variantMonthlies) : grandTotalMonthly;
 
-      setAiResult({ summary: parsed.summary, scenarios: withCosts, groups, groupTotals, hasMultipleGroups, variants, variantTotals, hasVariants, grandTotal, grandTotalMax, grandTotalMonthly, grandTotalMonthlyMax });
+      const totalAnnualTraffic = parsed.total_annual_traffic || 0;
+      setAiResult({ summary: parsed.summary, scenarios: withCosts, groups, groupTotals, hasMultipleGroups, variants, variantTotals, hasVariants, grandTotal, grandTotalMax, grandTotalMonthly, grandTotalMonthlyMax, totalAnnualTraffic });
     } catch (err) {
       if (err instanceof SyntaxError) {
         setError("L'AI ha risposto in un formato non valido. Riprova.");
@@ -1044,6 +1051,173 @@ function VariantTable({ aiResult, markup, clientName, projectName }) {
   );
 }
 
+// ─── Coverage Slider: interactive AI coverage % with live cost recalculation ───
+function CoverageSlider({ aiResult, markup }) {
+  // Calculate original coverage from AI result
+  const totalTraffic = aiResult.totalAnnualTraffic || 0;
+  const variantTotals = aiResult.variantTotals || {};
+  const variantKeys = Object.keys(variantTotals);
+
+  // Get min/max AI conversations from variants
+  const variantConvs = variantKeys.map(v => variantTotals[v].totalConv || 0);
+  const minConv = Math.min(...variantConvs);
+  const maxConv = Math.max(...variantConvs);
+
+  // Original coverage percentages
+  const origCoverageMin = totalTraffic > 0 ? (minConv / totalTraffic) * 100 : 0;
+  const origCoverageMax = totalTraffic > 0 ? (maxConv / totalTraffic) * 100 : 0;
+
+  const [coveragePct, setCoveragePct] = useState(null); // null = original values
+  const isCustom = coveragePct !== null;
+
+  // Calculate scaled costs based on custom coverage
+  const scaleFactor = useMemo(() => {
+    if (!isCustom || totalTraffic === 0) return 1;
+    const customConv = totalTraffic * (coveragePct / 100);
+    // Scale relative to the midpoint of original variants
+    const origMid = (minConv + maxConv) / 2;
+    return origMid > 0 ? customConv / origMid : 1;
+  }, [coveragePct, isCustom, totalTraffic, minConv, maxConv]);
+
+  // Per-variant scaled costs
+  const scaledVariants = useMemo(() => {
+    if (!isCustom) return null;
+    const result = {};
+    for (const [v, vt] of Object.entries(variantTotals)) {
+      const origConv = vt.totalConv || 0;
+      const factor = origConv > 0 ? (totalTraffic * (coveragePct / 100)) / (minConv + maxConv) * 2 : 1;
+      // Actually: scale each variant's conv proportionally
+      const newConv = totalTraffic * (coveragePct / 100) * (origConv / (minConv + maxConv) * 2);
+      // Costs scale linearly with conversations
+      const costFactor = origConv > 0 ? newConv / origConv : 1;
+      result[v] = {
+        ...vt,
+        totalConv: Math.round(newConv),
+        total: vt.total * costFactor,
+        monthly: vt.monthly * costFactor,
+      };
+    }
+    return result;
+  }, [isCustom, coveragePct, variantTotals, totalTraffic, minConv, maxConv]);
+
+  // Scaled grand totals
+  const scaledGrandTotal = useMemo(() => {
+    if (!scaledVariants) return null;
+    const costs = Object.values(scaledVariants).map(v => v.total);
+    const monthlies = Object.values(scaledVariants).map(v => v.monthly);
+    return {
+      min: Math.min(...costs),
+      max: Math.max(...costs),
+      monthlyMin: Math.min(...monthlies),
+      monthlyMax: Math.max(...monthlies),
+      convMin: Math.min(...Object.values(scaledVariants).map(v => v.totalConv)),
+      convMax: Math.max(...Object.values(scaledVariants).map(v => v.totalConv)),
+    };
+  }, [scaledVariants]);
+
+  if (totalTraffic === 0) return null;
+
+  const displayPct = isCustom ? coveragePct : null;
+  const customConv = isCustom ? Math.round(totalTraffic * (coveragePct / 100)) : 0;
+
+  return (
+    <div className="coverage-slider-wrap">
+      <div className="coverage-slider-header">
+        <div className="coverage-slider-title">
+          <span className="coverage-slider-icon">📡</span>
+          Copertura AI sul traffico totale
+        </div>
+        <div className="coverage-slider-traffic">
+          Traffico totale: <strong>{fmtInt(totalTraffic)}</strong> chiamate/anno
+        </div>
+      </div>
+
+      {/* Original coverage info */}
+      <div className="coverage-slider-original">
+        <div className="coverage-badge-row">
+          {origCoverageMin !== origCoverageMax ? (
+            <>
+              <span className="coverage-badge coverage-badge-low">{origCoverageMin.toFixed(1)}%</span>
+              <span className="coverage-badge-sep">—</span>
+              <span className="coverage-badge coverage-badge-high">{origCoverageMax.toFixed(1)}%</span>
+              <span className="coverage-badge-label">copertura analizzata ({fmtInt(minConv)} – {fmtInt(maxConv)} conv.)</span>
+            </>
+          ) : (
+            <>
+              <span className="coverage-badge coverage-badge-low">{origCoverageMin.toFixed(1)}%</span>
+              <span className="coverage-badge-label">copertura analizzata ({fmtInt(minConv)} conv.)</span>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Slider */}
+      <div className="coverage-slider-control">
+        <label className="coverage-slider-label">
+          Simula copertura:
+          <strong style={{ marginLeft: "6px", fontFamily: "'JetBrains Mono', monospace" }}>
+            {isCustom ? `${coveragePct}%` : "—"}
+          </strong>
+          {isCustom && (
+            <span style={{ fontSize: "11px", color: "var(--text-light)", marginLeft: "8px" }}>
+              ({fmtInt(customConv)} conv./anno)
+            </span>
+          )}
+        </label>
+        <div className="coverage-slider-row">
+          <span className="coverage-slider-bound">5%</span>
+          <input
+            type="range"
+            min={5}
+            max={95}
+            step={1}
+            value={isCustom ? coveragePct : Math.round((origCoverageMin + origCoverageMax) / 2)}
+            onChange={e => setCoveragePct(Number(e.target.value))}
+            className="coverage-slider-input"
+          />
+          <span className="coverage-slider-bound">95%</span>
+        </div>
+        {isCustom && (
+          <button className="coverage-slider-reset" onClick={() => setCoveragePct(null)}>
+            ↺ Torna ai valori originali
+          </button>
+        )}
+      </div>
+
+      {/* Scaled results preview */}
+      {isCustom && scaledGrandTotal && (
+        <div className="coverage-slider-preview">
+          <div className="coverage-preview-title">Stima a copertura {coveragePct}%</div>
+          <div className="coverage-preview-costs">
+            <div className="coverage-preview-main">
+              {scaledGrandTotal.min !== scaledGrandTotal.max ? (
+                <>da {fmtEur(scaledGrandTotal.min)} a {fmtEur(scaledGrandTotal.max)}</>
+              ) : (
+                <>{fmtEur(scaledGrandTotal.min)}</>
+              )}
+              <span className="coverage-preview-period"> / anno</span>
+            </div>
+            {markup > 0 && (
+              <div className="coverage-preview-selling">
+                Vendita: da {fmtEur(scaledGrandTotal.min * (1 + markup / 100))} a {fmtEur(scaledGrandTotal.max * (1 + markup / 100))} (+{markup}%)
+              </div>
+            )}
+            <div className="coverage-preview-monthly">
+              Media mensile: da {fmtEur(scaledGrandTotal.monthlyMin)} a {fmtEur(scaledGrandTotal.monthlyMax)}
+            </div>
+            <div className="coverage-preview-conv">
+              {scaledGrandTotal.convMin !== scaledGrandTotal.convMax
+                ? `${fmtInt(scaledGrandTotal.convMin)} – ${fmtInt(scaledGrandTotal.convMax)} conversazioni AI / anno`
+                : `${fmtInt(scaledGrandTotal.convMin)} conversazioni AI / anno`
+              }
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── AI Assistant Results Component (right panel) ───
 function AiAssistantResults({ prices, markup }) {
   const { aiResult, loading, clientName, projectName } = useContext(AiContext);
@@ -1141,6 +1315,11 @@ function AiAssistantResults({ prices, markup }) {
                 </div>
               </div>
 
+              {/* Coverage slider */}
+              {aiResult.totalAnnualTraffic > 0 && (
+                <CoverageSlider aiResult={aiResult} markup={markup} />
+              )}
+
               {/* Variant comparison table — Excel-style */}
               <VariantTable aiResult={aiResult} markup={markup} clientName={clientName} projectName={projectName} />
             </>
@@ -1168,6 +1347,11 @@ function AiAssistantResults({ prices, markup }) {
                 {aiResult.scenarios.length} scenari generati
               </div>
             </div>
+          )}
+
+          {/* Coverage slider (also for non-variant results) */}
+          {!aiResult.hasVariants && aiResult.totalAnnualTraffic > 0 && (
+            <CoverageSlider aiResult={aiResult} markup={markup} />
           )}
 
           {/* Anti-double-counting warning */}
