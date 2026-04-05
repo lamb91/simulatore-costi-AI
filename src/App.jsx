@@ -682,12 +682,18 @@ function AiAssistantInput({ prices, markup }) {
       const hasMultipleGroups = Object.keys(groups).length > 1;
       const groupTotals = {};
       for (const [g, scenarios] of Object.entries(groups)) {
-        const total = scenarios.reduce((acc, s) => acc + s.results.totalCost, 0);
-        const monthly = scenarios.reduce((acc, s) => {
-          const pm = s._config.periodMonths || 1;
-          return acc + s.results.totalCost / pm;
-        }, 0);
-        groupTotals[g] = { total, monthly, count: scenarios.length };
+        // Calculate per-variant totals within this group to show range (min–max) instead of misleading sum
+        const gVariants = {};
+        scenarios.forEach(s => {
+          const v = s.variant || "default";
+          if (!gVariants[v]) gVariants[v] = 0;
+          gVariants[v] += s.results.totalCost;
+        });
+        const gVariantCosts = Object.values(gVariants);
+        const hasGVariants = gVariantCosts.length > 1;
+        const min = Math.min(...gVariantCosts);
+        const max = Math.max(...gVariantCosts);
+        groupTotals[g] = { min, max, hasRange: hasGVariants, count: scenarios.length, variantCount: gVariantCosts.length };
       }
 
       // Detect variants (alternative scenarios) within aggregato
@@ -1182,7 +1188,10 @@ function AiAssistantResults({ prices, markup }) {
               {aiResult.groupTotals && Object.entries(aiResult.groupTotals).map(([g, gt]) => (
                 <div key={g} style={{ marginTop: "6px" }}>
                   <span style={{ fontWeight: 600, textTransform: "capitalize" }}>{g.replace("_", " ")}:</span>{" "}
-                  {fmtEur(gt.total)} ({gt.count} scenari)
+                  {gt.hasRange
+                    ? <>da {fmtEur(gt.min)} a {fmtEur(gt.max)} / anno ({gt.variantCount} alternative, {gt.count} scenari)</>
+                    : <>{fmtEur(gt.min)} / anno ({gt.count} scenari)</>
+                  }
                 </div>
               ))}
             </div>
