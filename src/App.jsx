@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useRef, useEffect, createContext, useContext } from "react";
+import * as XLSX from "xlsx";
 import "./App.css";
 
 // ─── Shared AI state context (connects split input/results panels) ───
@@ -814,6 +815,171 @@ function AiAssistantInput({ prices, markup }) {
   );
 }
 
+// ─── XLSX Export ───
+function exportXLSX(aiResult, markup, clientName, projectName) {
+  const wb = XLSX.utils.book_new();
+  const showGroup = aiResult.hasMultipleGroups;
+  const showVariant = aiResult.hasVariants;
+  const showVendita = markup > 0;
+
+  const allRows = showGroup
+    ? Object.entries(aiResult.groups).flatMap(([gName, gScens]) =>
+        gScens.map(s => ({ ...s, _groupName: gName }))
+      )
+    : aiResult.scenarios.map(s => ({ ...s, _groupName: null }));
+
+  const headers = [
+    ...(showGroup ? ["Gruppo"] : []),
+    ...(showVariant ? ["Variante"] : []),
+    "Scenario", "Periodo", "Conversazioni",
+    "ASR", "Costo ASR (€)",
+    "TTS", "Costo TTS (€)",
+    "LLM", "Costo LLM (€)",
+    "Totale API (€)", "Media/mese (€)", "Costo/conv (€)",
+    ...(showVendita ? [`Vendita +${markup}% (€)`] : []),
+    "Note",
+  ];
+
+  const dataRows = allRows.map(s => {
+    const pm = s._config?.periodMonths || s.periodMonths || 1;
+    const monthly = pm > 0 ? s.results.totalCost / pm : s.results.totalCost;
+    return [
+      ...(showGroup ? [s._groupName === "aggregato" ? "Aggregato" : (s._groupName || "").replace(/_/g, " ")] : []),
+      ...(showVariant ? [s.variant ? s.variant.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()) : "—"] : []),
+      s.label || "",
+      s.period || `${pm} ${pm === 1 ? "mese" : "mesi"}`,
+      s.conversations || 0,
+      ASR_MODELS[s.asrModel] || s.asrModel || "—",
+      s.results.asrCost,
+      TTS_MODELS[s.ttsModel] || s.ttsModel || "—",
+      s.results.ttsCost,
+      LLM_MODELS[s.llmModel] || s.llmModel || "—",
+      s.results.llmCost,
+      s.results.totalCost,
+      monthly,
+      s.results.costPerConv,
+      ...(showVendita ? [s.results.totalCost * (1 + markup / 100)] : []),
+      s.note || "",
+    ];
+  });
+
+  const infoRows = [
+    ["ELLYSSE — Simulatore Costi AI"],
+    ...(clientName ? [["Cliente:", clientName]] : []),
+    ...(projectName ? [["Progetto:", projectName]] : []),
+    [`Generato il: ${new Date().toLocaleDateString("it-IT")}`],
+    [],
+  ];
+
+  const ws1 = XLSX.utils.aoa_to_sheet([...infoRows, headers, ...dataRows]);
+  ws1["!cols"] = headers.map(h => {
+    if (["Scenario", "ASR", "TTS", "LLM"].includes(h)) return { wch: 28 };
+    if (h === "Note") return { wch: 40 };
+    if (h.includes("(€)") || h === "Conversazioni") return { wch: 18 };
+    return { wch: 18 };
+  });
+  XLSX.utils.book_append_sheet(wb, ws1, "Scenari");
+
+  if (aiResult.hasVariants && Object.keys(aiResult.variantTotals).length > 0) {
+    const rh = ["Combinazione", "Conv. totali", "Mesi", "Costo API (€)", "Media/mese (€)",
+      ...(markup > 0 ? [`Vendita +${markup}% (€)`] : [])];
+    const rd = Object.entries(aiResult.variantTotals).map(([, vt]) => [
+      vt.label, vt.totalConv, vt.totalMonths, vt.total, vt.monthly,
+      ...(markup > 0 ? [vt.total * (1 + markup / 100)] : []),
+    ]);
+    const ws2 = XLSX.utils.aoa_to_sheet([["ELLYSSE — Riepilogo Varianti"], [], rh, ...rd]);
+    ws2["!cols"] = [{ wch: 35 }, { wch: 14 }, { wch: 10 }, { wch: 18 }, { wch: 18 }, ...(markup > 0 ? [{ wch: 20 }] : [])];
+    XLSX.utils.book_append_sheet(wb, ws2, "Riepilogo");
+  } else if (aiResult.hasMultipleGroups && aiResult.groupTotals) {
+    const rh = ["Gruppo", "Scenari", "Costo totale (€)", "Media/mese (€)"];
+    const rd = Object.entries(aiResult.groupTotals).map(([g, gt]) => [
+      g === "aggregato" ? "Aggregato" : g.replace(/_/g, " "), gt.count, gt.total, gt.monthly,
+    ]);
+    const ws2 = XLSX.utils.aoa_to_sheet([["ELLYSSE — Riepilogo Gruppi"], [], rh, ...rd]);
+    ws2["!cols"] = [{ wch: 25 }, { wch: 10 }, { wch: 20 }, { wch: 18 }];
+    XLSX.utils.book_append_sheet(wb, ws2, "Riepilogo");
+  }
+
+  const fn = `Preventivo_${(clientName || "Scenario").replace(/\s+/g, "_")}_${new Date().toLocaleDateString("it-IT").replace(/\//g, "-")}.xlsx`;
+  XLSX.writeFile(wb, fn);
+}
+
+// ─── Excel-style scenario table ───
+function ScenarioTable({ aiResult, markup }) {
+  const showGroup = aiResult.hasMultipleGroups;
+  const showVariant = aiResult.hasVariants;
+  const showVendita = markup > 0;
+
+  const rows = showGroup
+    ? Object.entries(aiResult.groups).flatMap(([gName, gScens]) =>
+        gScens.map(s => ({ ...s, _groupName: gName }))
+      )
+    : aiResult.scenarios.map(s => ({ ...s, _groupName: null }));
+
+  return (
+    <div style={{ overflowX: "auto", borderRadius: "8px", border: "1px solid var(--border)", marginBottom: "16px" }}>
+      <table className="scenario-excel-table">
+        <thead>
+          <tr>
+            {showGroup && <th>Gruppo</th>}
+            {showVariant && <th>Variante</th>}
+            <th>Scenario</th>
+            <th>Periodo</th>
+            <th className="xls-num">Conv.</th>
+            <th>ASR</th>
+            <th className="xls-num">ASR €</th>
+            <th>TTS</th>
+            <th className="xls-num">TTS €</th>
+            <th>LLM</th>
+            <th className="xls-num">LLM €</th>
+            <th className="xls-num xls-total-col">Totale API</th>
+            <th className="xls-num">/mese</th>
+            <th className="xls-num">/conv</th>
+            {showVendita && <th className="xls-num xls-vendita-col">Vendita +{markup}%</th>}
+            <th>Note</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((s, i) => {
+            const pm = s._config?.periodMonths || s.periodMonths || 1;
+            const monthly = pm > 0 ? s.results.totalCost / pm : s.results.totalCost;
+            const selling = s.results.totalCost * (1 + markup / 100);
+            const isAggregato = !s._groupName || s._groupName === "aggregato";
+            return (
+              <tr key={i} className={`${i % 2 === 0 ? "xls-row-even" : "xls-row-odd"}${!isAggregato ? " xls-row-detail" : ""}`}>
+                {showGroup && (
+                  <td className="xls-group-cell">
+                    {s._groupName === "aggregato" ? "Aggregato" : (s._groupName || "").replace(/_/g, " ")}
+                  </td>
+                )}
+                {showVariant && (
+                  <td className="xls-variant-cell">
+                    {s.variant ? s.variant.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()) : "—"}
+                  </td>
+                )}
+                <td className="xls-label-cell">{s.label}</td>
+                <td className="xls-period-cell">{s.period || `${pm} ${pm === 1 ? "mese" : "mesi"}`}</td>
+                <td className="xls-num">{fmtInt(s.conversations)}</td>
+                <td className="xls-model-cell">{ASR_MODELS[s.asrModel] || s.asrModel || "—"}</td>
+                <td className="xls-num">{fmtEur(s.results.asrCost)}</td>
+                <td className="xls-model-cell">{TTS_MODELS[s.ttsModel] || s.ttsModel || "—"}</td>
+                <td className="xls-num">{fmtEur(s.results.ttsCost)}</td>
+                <td className="xls-model-cell">{LLM_MODELS[s.llmModel] || s.llmModel || "—"}</td>
+                <td className="xls-num">{fmtEur(s.results.llmCost)}</td>
+                <td className="xls-num xls-total-col">{fmtEur(s.results.totalCost)}</td>
+                <td className="xls-num">{fmtEur(monthly)}</td>
+                <td className="xls-num">{fmtEur(s.results.costPerConv)}</td>
+                {showVendita && <td className="xls-num xls-vendita-col">{fmtEur(selling)}</td>}
+                <td className="xls-note-cell">{s.note || ""}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ─── AI Assistant Results Component (right panel) ───
 function AiAssistantResults({ prices, markup }) {
   const { aiResult, loading, clientName, projectName } = useContext(AiContext);
@@ -1007,179 +1173,19 @@ function AiAssistantResults({ prices, markup }) {
             </div>
           )}
 
-          {/* Scenario cards — grouped */}
-          {aiResult.hasMultipleGroups ? (
-            Object.entries(aiResult.groups).map(([groupName, groupScenarios]) => (
-              <div key={groupName} style={{ marginBottom: "24px" }}>
-                <div style={{
-                  fontSize: "13px",
-                  fontWeight: 700,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.05em",
-                  color: groupName === "aggregato" ? "var(--navy)" : "var(--text-mid)",
-                  borderBottom: groupName === "aggregato" ? "2px solid var(--navy)" : "1px solid var(--border)",
-                  paddingBottom: "6px",
-                  marginBottom: "12px",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "baseline",
-                }}>
-                  <span>{groupName === "aggregato" ? "📊 Scenari Aggregati (usati per il totale)" : `📋 Dettaglio: ${groupName.replace("_", " ")}`}</span>
-                  <span style={{ fontSize: "11px", fontWeight: 400, color: "var(--text-light)" }}>
-                    {fmtEur(aiResult.groupTotals[groupName]?.total || 0)}
-                  </span>
-                </div>
-                <div className="ai-scenarios-grid">
-                  {groupScenarios.map((s, i) => {
-                    const sellingPrice = s.results.totalCost * (1 + markup / 100);
-                    const pm = s._config?.periodMonths || s.periodMonths || 1;
-                    const monthlyCost = pm > 0 ? s.results.totalCost / pm : s.results.totalCost;
-                    const periodLabel = pm === 1 ? "/ mese" : `/ ${pm} mesi`;
-                    return (
-                      <div key={i} className="ai-scenario-card" style={groupName !== "aggregato" ? { opacity: 0.85, borderLeftColor: "var(--text-light)" } : {}}>
-                        <div className="ai-scenario-header">
-                          <div>
-                            <div className="ai-scenario-label">{s.label}</div>
-                            {s.period && <div className="ai-scenario-period">{s.period}</div>}
-                          </div>
-                          <button
-                            className="btn-card-edit"
-                            title="Carica nei campi della simulazione dettagliata"
-                            onClick={() => onLoadScenario && onLoadScenario({
-                              conversations: s.conversations, avgDurationSec: s.avgDurationSec ?? 90, turnsPerConv: s.turnsPerConv ?? 3,
-                              asrModel: s.asrModel || "google_asr_standard", ttsModel: s.ttsModel || "google_tts_wavenet", llmModel: s.llmModel || "gemini_flash",
-                              avgInputTokens: s.avgInputTokens ?? 300, avgOutputTokens: s.avgOutputTokens ?? 150, avgTtsChars: s.avgTtsChars ?? 200,
-                              pctWithTts: s.pctWithTts ?? 100, periodMonths: pm, label: s.label,
-                            })}
-                          >↓ Carica nel form</button>
-                        </div>
-                        <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginBottom: "2px" }}>
-                          <span style={{ fontSize: "22px", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: "var(--navy)" }}>
-                            {fmtEur(s.results.totalCost)}
-                          </span>
-                          <span style={{ fontSize: "11px", color: "var(--text-light)" }}>costo API {periodLabel}</span>
-                        </div>
-                        {pm > 1 && (
-                          <div style={{ fontSize: "12px", color: "var(--text-mid)", fontFamily: "'JetBrains Mono', monospace", marginBottom: "2px" }}>
-                            {fmtEur(monthlyCost)} / mese
-                          </div>
-                        )}
-                        {markup > 0 && (
-                          <div style={{ fontSize: "13px", color: "var(--orange)", fontFamily: "'JetBrains Mono', monospace", marginBottom: "6px" }}>
-                            Vendita: {fmtEur(sellingPrice)} {periodLabel}
-                          </div>
-                        )}
-                        <div style={{ fontSize: "12px", color: "var(--text-mid)", marginBottom: "8px" }}>
-                          {fmtInt(s.conversations)} conv. in {pm} {pm === 1 ? "mese" : "mesi"} &middot; {fmtEur(s.results.costPerConv)}/conv
-                        </div>
-                        <BreakdownBar asr={s.results.asrCost} tts={s.results.ttsCost} llm={s.results.llmCost} total={s.results.totalCost} />
-                        <div className="detail-row" style={{ fontSize: "12px" }}>
-                          <span className="detail-label">ASR</span>
-                          <span className="detail-value" style={{ fontSize: "12px" }}>{fmtEur(s.results.asrCost)}</span>
-                        </div>
-                        <div className="detail-row" style={{ fontSize: "12px" }}>
-                          <span className="detail-label">TTS ({TTS_MODELS[s.ttsModel] || s.ttsModel})</span>
-                          <span className="detail-value" style={{ fontSize: "12px" }}>{fmtEur(s.results.ttsCost)}</span>
-                        </div>
-                        <div className="detail-row" style={{ fontSize: "12px" }}>
-                          <span className="detail-label">LLM ({LLM_MODELS[s.llmModel] || s.llmModel})</span>
-                          <span className="detail-value" style={{ fontSize: "12px" }}>{fmtEur(s.results.llmCost)}</span>
-                        </div>
-                        {s.note && <div className="ai-scenario-note">{s.note}</div>}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ))
-          ) : (
-          <div className="ai-scenarios-grid">
-            {aiResult.scenarios.map((s, i) => {
-              const sellingPrice = s.results.totalCost * (1 + markup / 100);
-              const pm = s._config?.periodMonths || s.periodMonths || 1;
-              const monthlyCost = pm > 0 ? s.results.totalCost / pm : s.results.totalCost;
-              const periodLabel = pm === 1 ? "/ mese" : `/ ${pm} mesi`;
-              return (
-                <div key={i} className="ai-scenario-card">
-                  <div className="ai-scenario-header">
-                    <div>
-                      <div className="ai-scenario-label">{s.label}</div>
-                      {s.period && <div className="ai-scenario-period">{s.period}</div>}
-                    </div>
-                    <button
-                      className="btn-card-edit"
-                      title="Carica nei campi della simulazione dettagliata"
-                      onClick={() => onLoadScenario && onLoadScenario({
-                        conversations: s.conversations,
-                        avgDurationSec: s.avgDurationSec ?? 90,
-                        turnsPerConv: s.turnsPerConv ?? 3,
-                        asrModel: s.asrModel || "google_asr_standard",
-                        ttsModel: s.ttsModel || "google_tts_wavenet",
-                        llmModel: s.llmModel || "gemini_flash",
-                        avgInputTokens: s.avgInputTokens ?? 300,
-                        avgOutputTokens: s.avgOutputTokens ?? 150,
-                        avgTtsChars: s.avgTtsChars ?? 200,
-                        pctWithTts: s.pctWithTts ?? 100,
-                        periodMonths: pm,
-                        label: s.label,
-                      })}
-                    >
-                      ↓ Carica nel form
-                    </button>
-                  </div>
+          {/* Scenario Table */}
+          <ScenarioTable aiResult={aiResult} markup={markup} />
 
-                  {/* Costs */}
-                  <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginBottom: "2px" }}>
-                    <span style={{ fontSize: "22px", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: "var(--navy)" }}>
-                      {fmtEur(s.results.totalCost)}
-                    </span>
-                    <span style={{ fontSize: "11px", color: "var(--text-light)" }}>costo API {periodLabel}</span>
-                  </div>
-                  {pm > 1 && (
-                    <div style={{ fontSize: "12px", color: "var(--text-mid)", fontFamily: "'JetBrains Mono', monospace", marginBottom: "2px" }}>
-                      {fmtEur(monthlyCost)} / mese
-                    </div>
-                  )}
-                  {markup > 0 && (
-                    <div style={{ fontSize: "13px", color: "var(--orange)", fontFamily: "'JetBrains Mono', monospace", marginBottom: "6px" }}>
-                      Vendita: {fmtEur(sellingPrice)} {periodLabel}
-                    </div>
-                  )}
-
-                  <div style={{ fontSize: "12px", color: "var(--text-mid)", marginBottom: "8px" }}>
-                    {fmtInt(s.conversations)} conv. in {pm} {pm === 1 ? "mese" : "mesi"} &middot; {fmtEur(s.results.costPerConv)}/conv
-                  </div>
-
-                  <BreakdownBar asr={s.results.asrCost} tts={s.results.ttsCost} llm={s.results.llmCost} total={s.results.totalCost} />
-
-                  {/* Details */}
-                  <div className="detail-row" style={{ fontSize: "12px" }}>
-                    <span className="detail-label">ASR</span>
-                    <span className="detail-value" style={{ fontSize: "12px" }}>{fmtEur(s.results.asrCost)}</span>
-                  </div>
-                  <div className="detail-row" style={{ fontSize: "12px" }}>
-                    <span className="detail-label">TTS ({TTS_MODELS[s.ttsModel] || s.ttsModel})</span>
-                    <span className="detail-value" style={{ fontSize: "12px" }}>{fmtEur(s.results.ttsCost)}</span>
-                  </div>
-                  <div className="detail-row" style={{ fontSize: "12px" }}>
-                    <span className="detail-label">LLM ({LLM_MODELS[s.llmModel] || s.llmModel})</span>
-                    <span className="detail-value" style={{ fontSize: "12px" }}>{fmtEur(s.results.llmCost)}</span>
-                  </div>
-
-                  {/* Note */}
-                  {s.note && (
-                    <div className="ai-scenario-note">{s.note}</div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          )}
-
-          {/* Print */}
-          <div className="print-btn-row no-print" style={{ marginTop: "1rem" }}>
+          {/* Export buttons */}
+          <div className="print-btn-row no-print" style={{ marginTop: "1rem", display: "flex", gap: "10px", flexWrap: "wrap" }}>
+            <button
+              className="btn-xlsx"
+              onClick={() => exportXLSX(aiResult, markup, clientName, projectName)}
+            >
+              ⬇ Esporta XLSX
+            </button>
             <button className="btn-print" onClick={() => window.print()}>
-              ⎙&nbsp; Esporta / Stampa PDF
+              ⎙&nbsp; Stampa / PDF
             </button>
           </div>
         </div>

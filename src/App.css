@@ -1446,6 +1446,125 @@ body {
   display: none;
 }
 
+/* ═══ SCENARIO EXCEL TABLE ═══ */
+.scenario-excel-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  background: white;
+  min-width: 900px;
+}
+
+.scenario-excel-table thead tr {
+  background: var(--navy);
+  color: white;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.scenario-excel-table thead th {
+  padding: 8px 10px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  border-right: 1px solid rgba(255,255,255,0.12);
+}
+
+.scenario-excel-table thead th.xls-num {
+  text-align: right;
+}
+
+.scenario-excel-table tbody td {
+  padding: 7px 10px;
+  border-bottom: 1px solid #e8eef5;
+  border-right: 1px solid #e8eef5;
+  vertical-align: middle;
+}
+
+.xls-row-even td { background: #ffffff; }
+.xls-row-odd td  { background: #f4f7fb; }
+.xls-row-detail td { opacity: 0.75; }
+.xls-row-even:hover td,
+.xls-row-odd:hover td  { background: #eaf1fa; }
+
+.xls-num {
+  text-align: right !important;
+  font-family: 'JetBrains Mono', monospace;
+  white-space: nowrap;
+}
+
+.xls-total-col {
+  font-weight: 700;
+  color: var(--navy) !important;
+  background: #eef4fc !important;
+}
+.xls-row-odd .xls-total-col { background: #e4edf8 !important; }
+
+.xls-vendita-col {
+  color: var(--orange) !important;
+  font-weight: 600;
+}
+
+.xls-label-cell {
+  font-weight: 600;
+  color: var(--text-dark);
+  white-space: nowrap;
+}
+
+.xls-model-cell {
+  color: var(--text-mid);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.xls-period-cell {
+  color: var(--text-mid);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.xls-group-cell {
+  font-weight: 600;
+  text-transform: capitalize;
+  color: var(--navy);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.xls-variant-cell {
+  font-size: 11px;
+  color: var(--text-mid);
+  white-space: nowrap;
+}
+
+.xls-note-cell {
+  font-size: 11px;
+  color: var(--text-light);
+  max-width: 220px;
+}
+
+/* XLSX export button */
+.btn-xlsx {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 18px;
+  background: #217346;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  transition: background 0.15s;
+}
+.btn-xlsx:hover { background: #1a5c38; }
+
 /* ── Print adjustments for builder ── */
 @media print {
   .print-header {
