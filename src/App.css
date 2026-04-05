@@ -1386,6 +1386,90 @@ body {
   }
 }
 
+/* ═══════════════════════════════════════════════════
+   VARIANT TABLE — EXCEL-STYLE
+   ═══════════════════════════════════════════════════ */
+.variant-table-wrap {
+  background: #fff;
+  border: 1px solid var(--pale-navy);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+.variant-table-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.variant-table-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--navy);
+}
+.variant-table-sub {
+  font-size: 11px;
+  color: var(--text-light);
+  margin-top: 2px;
+}
+.variant-export-btn {
+  padding: 8px 16px;
+  border: 1.5px solid var(--navy);
+  border-radius: 8px;
+  background: var(--white);
+  color: var(--navy);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.2s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.variant-export-btn:hover {
+  background: var(--navy);
+  color: var(--white);
+}
+.variant-table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.variant-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  min-width: 600px;
+}
+.variant-table th,
+.variant-table td {
+  white-space: nowrap;
+}
+.variant-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.5px;
+  vertical-align: middle;
+}
+.variant-badge-low {
+  background: #dcfce7;
+  color: #16a34a;
+}
+.variant-badge-high {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+@media print {
+  .variant-export-btn { display: none; }
+  .variant-table-wrap { break-inside: avoid; page-break-inside: avoid; }
+}
+
 /* ── Client / Project row ── */
 .builder-client-row {
   display: flex;

@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useRef, useEffect, createContext, useContext } from "react";
+import * as XLSX from "xlsx";
 import "./App.css";
 
 // ─── Shared AI state context (connects split input/results panels) ───
@@ -814,6 +815,229 @@ function AiAssistantInput({ prices, markup }) {
   );
 }
 
+// ─── Variant Comparison Table (Excel-style) + XLSX Export ───
+function VariantTable({ aiResult, markup, clientName, projectName }) {
+  if (!aiResult?.variantTotals) return null;
+
+  // Build detailed rows: one per variant, with ASR/TTS/LLM breakdown
+  const rows = Object.entries(aiResult.variantTotals).map(([v, vt]) => {
+    const scenarios = aiResult.variants[v] || [];
+    const asr = scenarios.reduce((a, s) => a + s.results.asrCost, 0);
+    const tts = scenarios.reduce((a, s) => a + s.results.ttsCost, 0);
+    const llm = scenarios.reduce((a, s) => a + s.results.llmCost, 0);
+    const isMin = vt.total === Math.min(...Object.values(aiResult.variantTotals).map(x => x.total));
+    const isMax = vt.total === Math.max(...Object.values(aiResult.variantTotals).map(x => x.total));
+    const ttsModel = scenarios[0]?.ttsModel || "";
+    const llmModel = scenarios[0]?.llmModel || "";
+    return { key: v, label: vt.label, conv: vt.totalConv, months: vt.totalMonths, asr, tts, llm, total: vt.total, monthly: vt.monthly, isMin, isMax, ttsModel, llmModel, selling: vt.total * (1 + markup / 100), sellingMonthly: vt.monthly * (1 + markup / 100) };
+  });
+
+  // Also build per-entity rows if available
+  const entityGroups = aiResult.groups?.["per_entita"] ? aiResult.groups["per_entita"] : [];
+  const entityRows = [];
+  if (entityGroups.length > 0) {
+    // Group entities by label (entity name) then by variant
+    const entityMap = {};
+    entityGroups.forEach(s => {
+      const entityName = (s.label || "").replace(/ - (WaveNet|Chirp 3|Studio|Neural2|ElevenLabs.*)/i, "").trim();
+      const v = s.variant || "default";
+      const mapKey = `${entityName}__${v}`;
+      if (!entityMap[mapKey]) entityMap[mapKey] = { entity: entityName, variant: v, scenarios: [] };
+      entityMap[mapKey].scenarios.push(s);
+    });
+    Object.values(entityMap).forEach(({ entity, variant, scenarios }) => {
+      const asr = scenarios.reduce((a, s) => a + s.results.asrCost, 0);
+      const tts = scenarios.reduce((a, s) => a + s.results.ttsCost, 0);
+      const llm = scenarios.reduce((a, s) => a + s.results.llmCost, 0);
+      const total = asr + tts + llm;
+      const totalMonths = scenarios.reduce((a, s) => a + (s._config?.periodMonths || 1), 0);
+      const monthly = totalMonths > 0 ? total / totalMonths : total;
+      const conv = scenarios.reduce((a, s) => a + (s._config?.conversations || 0), 0);
+      const vLabel = (variant || "").replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+      entityRows.push({ entity, variant: vLabel, conv, asr, tts, llm, total, monthly, selling: total * (1 + markup / 100) });
+    });
+  }
+
+  const exportXlsx = () => {
+    const wb = XLSX.utils.book_new();
+
+    // Sheet 1: Riepilogo alternative
+    const summaryData = [
+      ["ELLYSSE — Simulatore Costi AI"],
+      [clientName ? `Cliente: ${clientName}` : "", projectName ? `Progetto: ${projectName}` : ""],
+      [`Generato il ${new Date().toLocaleDateString("it-IT", { day: "numeric", month: "long", year: "numeric" })}`],
+      [],
+      ["RIEPILOGO COSTI ANNUALI PER COMBINAZIONE"],
+      ["Combinazione", "Conv./anno", "Costo ASR (€)", "Costo TTS (€)", "Costo LLM (€)", "Totale annuale (€)", "Media/mese (€)", ...(markup > 0 ? ["Vendita anno (€)", "Vendita/mese (€)"] : [])],
+    ];
+    rows.forEach(r => {
+      summaryData.push([
+        r.label,
+        r.conv,
+        Math.round(r.asr * 100) / 100,
+        Math.round(r.tts * 100) / 100,
+        Math.round(r.llm * 100) / 100,
+        Math.round(r.total * 100) / 100,
+        Math.round(r.monthly * 100) / 100,
+        ...(markup > 0 ? [Math.round(r.selling * 100) / 100, Math.round(r.sellingMonthly * 100) / 100] : []),
+      ]);
+    });
+
+    const ws1 = XLSX.utils.aoa_to_sheet(summaryData);
+    ws1["!cols"] = [{ wch: 32 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 16 }, ...(markup > 0 ? [{ wch: 18 }, { wch: 16 }] : [])];
+    XLSX.utils.book_append_sheet(wb, ws1, "Riepilogo");
+
+    // Sheet 2: Dettaglio scenari
+    const detailData = [
+      ["DETTAGLIO SCENARI"],
+      ["Gruppo", "Variante", "Scenario", "Periodo", "Mesi", "Conversazioni", "Durata (sec)", "Turni", "ASR Model", "TTS Model", "LLM Model", "Costo ASR (€)", "Costo TTS (€)", "Costo LLM (€)", "Totale (€)", "€/conv", ...(markup > 0 ? ["Vendita (€)"] : [])],
+    ];
+    aiResult.scenarios.forEach(s => {
+      const pm = s._config?.periodMonths || s.periodMonths || 1;
+      detailData.push([
+        s.group || "aggregato",
+        s.variant || "default",
+        s.label,
+        s.period || "",
+        pm,
+        s.conversations || 0,
+        s.avgDurationSec || 0,
+        s.turnsPerConv || 0,
+        ASR_MODELS[s.asrModel] || s.asrModel || "",
+        TTS_MODELS[s.ttsModel] || s.ttsModel || "",
+        LLM_MODELS[s.llmModel] || s.llmModel || "",
+        Math.round(s.results.asrCost * 100) / 100,
+        Math.round(s.results.ttsCost * 100) / 100,
+        Math.round(s.results.llmCost * 100) / 100,
+        Math.round(s.results.totalCost * 100) / 100,
+        Math.round(s.results.costPerConv * 10000) / 10000,
+        ...(markup > 0 ? [Math.round(s.results.totalCost * (1 + markup / 100) * 100) / 100] : []),
+      ]);
+    });
+
+    const ws2 = XLSX.utils.aoa_to_sheet(detailData);
+    ws2["!cols"] = [{ wch: 14 }, { wch: 18 }, { wch: 36 }, { wch: 22 }, { wch: 6 }, { wch: 14 }, { wch: 10 }, { wch: 6 }, { wch: 22 }, { wch: 28 }, { wch: 18 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 10 }, ...(markup > 0 ? [{ wch: 14 }] : [])];
+    XLSX.utils.book_append_sheet(wb, ws2, "Dettaglio scenari");
+
+    // Sheet 3: Per entità (if available)
+    if (entityRows.length > 0) {
+      const entityData = [
+        ["DETTAGLIO PER ENTITÀ"],
+        ["Entità", "Variante", "Conv./anno", "Costo ASR (€)", "Costo TTS (€)", "Costo LLM (€)", "Totale (€)", "Media/mese (€)", ...(markup > 0 ? ["Vendita (€)"] : [])],
+      ];
+      entityRows.forEach(r => {
+        entityData.push([
+          r.entity, r.variant, r.conv,
+          Math.round(r.asr * 100) / 100, Math.round(r.tts * 100) / 100, Math.round(r.llm * 100) / 100,
+          Math.round(r.total * 100) / 100, Math.round(r.monthly * 100) / 100,
+          ...(markup > 0 ? [Math.round(r.selling * 100) / 100] : []),
+        ]);
+      });
+      const ws3 = XLSX.utils.aoa_to_sheet(entityData);
+      ws3["!cols"] = [{ wch: 28 }, { wch: 18 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 16 }, ...(markup > 0 ? [{ wch: 14 }] : [])];
+      XLSX.utils.book_append_sheet(wb, ws3, "Per entità");
+    }
+
+    const filename = `${(clientName || "Simulazione").replace(/[^a-zA-Z0-9àèéìòù ]/g, "")}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    XLSX.writeFile(wb, filename);
+  };
+
+  const thStyle = { textAlign: "right", padding: "8px 10px", color: "var(--navy)", fontSize: "11px", fontWeight: 700, borderBottom: "2px solid var(--navy)", whiteSpace: "nowrap" };
+  const thLeftStyle = { ...thStyle, textAlign: "left" };
+  const tdStyle = { textAlign: "right", padding: "8px 10px", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px", borderBottom: "1px solid var(--pale-navy)" };
+  const tdLeftStyle = { ...tdStyle, textAlign: "left", fontFamily: "inherit", fontWeight: 600 };
+  const tdSubStyle = { ...tdStyle, color: "var(--text-light)", fontSize: "11px" };
+
+  return (
+    <div className="variant-table-wrap">
+      <div className="variant-table-header">
+        <div>
+          <div className="variant-table-title">Riepilogo costi annuali per combinazione</div>
+          <div className="variant-table-sub">Ogni riga è un'alternativa. Colonne ASR/TTS/LLM mostrano il breakdown del costo annuale.</div>
+        </div>
+        <button className="variant-export-btn" onClick={exportXlsx}>
+          📥 Esporta Excel
+        </button>
+      </div>
+      <div className="variant-table-scroll">
+        <table className="variant-table">
+          <thead>
+            <tr>
+              <th style={thLeftStyle}>Combinazione</th>
+              <th style={thStyle}>Conv./anno</th>
+              <th style={{ ...thStyle, color: COLORS.asr }}>ASR (€)</th>
+              <th style={{ ...thStyle, color: COLORS.tts }}>TTS (€)</th>
+              <th style={{ ...thStyle, color: COLORS.llm }}>LLM (€)</th>
+              <th style={{ ...thStyle, fontWeight: 800 }}>Totale anno (€)</th>
+              <th style={thStyle}>Media/mese (€)</th>
+              {markup > 0 && <th style={{ ...thStyle, color: "var(--orange)" }}>Vendita anno (€)</th>}
+              {markup > 0 && <th style={{ ...thStyle, color: "var(--orange)" }}>Vendita/mese (€)</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(r => (
+              <tr key={r.key} style={{ background: r.isMin ? "#f0fdf4" : r.isMax ? "#fef2f2" : "transparent" }}>
+                <td style={tdLeftStyle}>
+                  {r.label}
+                  {r.isMin && <span className="variant-badge variant-badge-low">MINORE</span>}
+                  {r.isMax && <span className="variant-badge variant-badge-high">MAGGIORE</span>}
+                </td>
+                <td style={tdSubStyle}>{fmtInt(r.conv)}</td>
+                <td style={tdSubStyle}>{fmt(r.asr)}</td>
+                <td style={tdSubStyle}>{fmt(r.tts)}</td>
+                <td style={tdSubStyle}>{fmt(r.llm)}</td>
+                <td style={{ ...tdStyle, fontWeight: 700, color: "var(--navy)", fontSize: "13px" }}>{fmt(r.total)}</td>
+                <td style={tdStyle}>{fmt(r.monthly)}</td>
+                {markup > 0 && <td style={{ ...tdStyle, color: "var(--orange)", fontWeight: 600 }}>{fmt(r.selling)}</td>}
+                {markup > 0 && <td style={{ ...tdStyle, color: "var(--orange)" }}>{fmt(r.sellingMonthly)}</td>}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Per-entity summary table */}
+      {entityRows.length > 0 && (
+        <>
+          <div className="variant-table-title" style={{ marginTop: "20px" }}>Riepilogo per entità</div>
+          <div className="variant-table-scroll">
+            <table className="variant-table">
+              <thead>
+                <tr>
+                  <th style={thLeftStyle}>Entità</th>
+                  <th style={thLeftStyle}>Variante</th>
+                  <th style={thStyle}>Conv./anno</th>
+                  <th style={{ ...thStyle, color: COLORS.asr }}>ASR (€)</th>
+                  <th style={{ ...thStyle, color: COLORS.tts }}>TTS (€)</th>
+                  <th style={{ ...thStyle, color: COLORS.llm }}>LLM (€)</th>
+                  <th style={{ ...thStyle, fontWeight: 800 }}>Totale (€)</th>
+                  <th style={thStyle}>Media/mese (€)</th>
+                  {markup > 0 && <th style={{ ...thStyle, color: "var(--orange)" }}>Vendita (€)</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {entityRows.map((r, i) => (
+                  <tr key={i}>
+                    <td style={tdLeftStyle}>{r.entity}</td>
+                    <td style={{ ...tdLeftStyle, fontWeight: 400, fontSize: "11px", color: "var(--text-mid)" }}>{r.variant}</td>
+                    <td style={tdSubStyle}>{fmtInt(r.conv)}</td>
+                    <td style={tdSubStyle}>{fmt(r.asr)}</td>
+                    <td style={tdSubStyle}>{fmt(r.tts)}</td>
+                    <td style={tdSubStyle}>{fmt(r.llm)}</td>
+                    <td style={{ ...tdStyle, fontWeight: 700, color: "var(--navy)" }}>{fmt(r.total)}</td>
+                    <td style={tdStyle}>{fmt(r.monthly)}</td>
+                    {markup > 0 && <td style={{ ...tdStyle, color: "var(--orange)" }}>{fmt(r.selling)}</td>}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── AI Assistant Results Component (right panel) ───
 function AiAssistantResults({ prices, markup }) {
   const { aiResult, loading, clientName, projectName } = useContext(AiContext);
@@ -911,51 +1135,8 @@ function AiAssistantResults({ prices, markup }) {
                 </div>
               </div>
 
-              {/* Variant comparison table */}
-              <div style={{
-                background: "white",
-                border: "1px solid var(--border)",
-                borderRadius: "10px",
-                padding: "16px",
-                marginBottom: "16px",
-              }}>
-                <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--navy)", marginBottom: "10px" }}>
-                  Riepilogo costi annuali per combinazione
-                </div>
-                <div style={{ fontSize: "11px", color: "var(--text-light)", marginBottom: "10px" }}>
-                  Ogni riga è una combinazione diversa di livello di automazione e modello TTS. Scegli la riga che corrisponde alla configurazione desiderata.
-                </div>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
-                  <thead>
-                    <tr style={{ borderBottom: "2px solid var(--navy)" }}>
-                      <th style={{ textAlign: "left", padding: "6px 8px", color: "var(--navy)" }}>Combinazione</th>
-                      <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--navy)" }}>Conv. / anno</th>
-                      <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--navy)" }}>Costo annuale</th>
-                      <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--navy)" }}>Media / mese</th>
-                      {markup > 0 && <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--orange)" }}>Vendita anno</th>}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Object.entries(aiResult.variantTotals).map(([v, vt]) => {
-                      const isMin = vt.total === Math.min(...Object.values(aiResult.variantTotals).map(x => x.total));
-                      const isMax = vt.total === Math.max(...Object.values(aiResult.variantTotals).map(x => x.total));
-                      return (
-                        <tr key={v} style={{ borderBottom: "1px solid var(--border)", background: isMin ? "#f0fdf4" : isMax ? "#fef2f2" : "transparent" }}>
-                          <td style={{ padding: "8px", fontWeight: 600 }}>
-                            {vt.label}
-                            {isMin && <span style={{ marginLeft: "6px", fontSize: "10px", color: "#16a34a", fontWeight: 700 }}>PIU' BASSO</span>}
-                            {isMax && <span style={{ marginLeft: "6px", fontSize: "10px", color: "#dc2626", fontWeight: 700 }}>PIU' ALTO</span>}
-                          </td>
-                          <td style={{ textAlign: "right", padding: "8px", fontFamily: "'JetBrains Mono', monospace", color: "var(--text-mid)" }}>{fmtInt(vt.totalConv)}</td>
-                          <td style={{ textAlign: "right", padding: "8px", fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: "var(--navy)" }}>{fmtEur(vt.total)}</td>
-                          <td style={{ textAlign: "right", padding: "8px", fontFamily: "'JetBrains Mono', monospace" }}>{fmtEur(vt.monthly)}</td>
-                          {markup > 0 && <td style={{ textAlign: "right", padding: "8px", fontFamily: "'JetBrains Mono', monospace", color: "var(--orange)" }}>{fmtEur(vt.total * (1 + markup / 100))}</td>}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              {/* Variant comparison table — Excel-style */}
+              <VariantTable aiResult={aiResult} markup={markup} clientName={clientName} projectName={projectName} />
             </>
           ) : (
             <div className="ai-grand-total">
