@@ -12,6 +12,7 @@ function AiProvider({ children }) {
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
   const [aiResult, setAiResult] = useState(null);
+  const originalAiResultRef = useRef(null);
   const [error, setError] = useState("");
   const [clientName, setClientName] = useState("");
   const [projectName, setProjectName] = useState("");
@@ -61,9 +62,17 @@ function AiProvider({ children }) {
     } catch {}
   }, [getSavedScenarios]);
 
+  // Wrap setAiResult to capture original on first set (from AI response)
+  const setAiResultWrapped = useCallback((result) => {
+    setAiResult(result);
+    if (result && !result._isRecalc) {
+      originalAiResultRef.current = result;
+    }
+  }, []);
+
   return (
     <AiContext.Provider value={{
-      apiKey, setApiKey, prompt, setPrompt, loading, setLoading, aiResult, setAiResult, error, setError,
+      apiKey, setApiKey, prompt, setPrompt, loading, setLoading, aiResult, setAiResult: setAiResultWrapped, originalAiResult: originalAiResultRef, error, setError,
       clientName, setClientName, projectName, setProjectName,
       getSavedScenarios, saveScenario, loadScenario, deleteScenario,
     }}>
@@ -557,15 +566,44 @@ Se ci sono anche livelli di automazione diversi (es. prudente 60% + ottimista 70
   - Bassa ottimista WaveNet → variant: "ottimista_wavenet"
   - etc.
 
-=== REGOLA 6: TRAFFICO TOTALE ANNUALE ===
-OBBLIGATORIO: nel JSON di risposta, includi SEMPRE il campo "total_annual_traffic" con il numero TOTALE di chiamate/conversazioni annuali PRIMA di qualsiasi filtro (informative, automazione). Questo è il volume grezzo lordo dell'azienda.
-Esempio: se il cliente ha 45.000 chiamate/mese → total_annual_traffic = 540.000.
-Se fornisce volumi per entità (es. 103.457 + 182.922 + ...) → total_annual_traffic = somma di tutti.
+=== REGOLA 6: TRAFFICO TOTALE E PARAMETRI ESTRATTI ===
+OBBLIGATORIO: nel JSON di risposta, includi SEMPRE:
+1. "total_annual_traffic": numero TOTALE di chiamate/conversazioni annuali PRIMA di qualsiasi filtro.
+   Esempio: 45.000 chiamate/mese → 540.000. Se volumi per entità (103.457 + 182.922 + ...) → somma di tutti.
+2. "parameters": oggetto con i parametri chiave estratti dal prompt dell'utente, per renderli visibili e modificabili.
+   Campi obbligatori:
+   - "total_calls_month": chiamate totali al mese (numero intero)
+   - "pct_informative_low": % chiamate informative in bassa stagione (es. 35)
+   - "pct_informative_high": % chiamate informative in alta stagione (es. 90)
+   - "months_low_season": mesi di bassa stagione (es. 7)
+   - "months_high_season": mesi di alta stagione (es. 5)
+   - "automation_levels": array di oggetti {label, pct} per ogni livello di automazione (es. [{label:"Prudente",pct:60},{label:"Ottimista",pct:70}])
+   - "avg_duration_sec": durata media conversazione in secondi
+   - "turns_per_conv": turni medi per conversazione
+   - "avg_input_tokens": token input medi per turno
+   - "avg_output_tokens": token output medi per turno
+   - "avg_tts_chars": caratteri TTS medi per turno (default 200)
+   - "pct_with_tts": percentuale conversazioni con TTS (100 voicebot, 0 chatbot)
+   Se un parametro non è specificato nel prompt, usa i default indicati nei campi scenario sopra.
 
 RISPONDI SOLO con JSON valido, nessun testo prima o dopo:
 {
   "summary": "Riepilogo in italiano (2-3 frasi). Specifica: gli scenari per_entita sono suddivisione degli aggregati e NON vanno sommati. Ogni combinazione (variant) è un'alternativa.",
   "total_annual_traffic": 543746,
+  "parameters": {
+    "total_calls_month": 45000,
+    "pct_informative_low": 35,
+    "pct_informative_high": 90,
+    "months_low_season": 7,
+    "months_high_season": 5,
+    "automation_levels": [{"label": "Prudente", "pct": 60}, {"label": "Ottimista", "pct": 70}],
+    "avg_duration_sec": 180,
+    "turns_per_conv": 4,
+    "avg_input_tokens": 8000,
+    "avg_output_tokens": 100,
+    "avg_tts_chars": 200,
+    "pct_with_tts": 100
+  },
   "scenarios": [
     {
       "group": "aggregato",
@@ -734,7 +772,8 @@ function AiAssistantInput({ prices, markup }) {
       const grandTotalMonthlyMax = hasVariants ? Math.max(...variantMonthlies) : grandTotalMonthly;
 
       const totalAnnualTraffic = parsed.total_annual_traffic || 0;
-      setAiResult({ summary: parsed.summary, scenarios: withCosts, groups, groupTotals, hasMultipleGroups, variants, variantTotals, hasVariants, grandTotal, grandTotalMax, grandTotalMonthly, grandTotalMonthlyMax, totalAnnualTraffic });
+      const parameters = parsed.parameters || null;
+      setAiResult({ summary: parsed.summary, scenarios: withCosts, groups, groupTotals, hasMultipleGroups, variants, variantTotals, hasVariants, grandTotal, grandTotalMax, grandTotalMonthly, grandTotalMonthlyMax, totalAnnualTraffic, parameters });
     } catch (err) {
       if (err instanceof SyntaxError) {
         setError("L'AI ha risposto in un formato non valido. Riprova.");
@@ -1047,6 +1086,277 @@ function VariantTable({ aiResult, markup, clientName, projectName }) {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+// ─── Recalculate entire aiResult from edited parameters ───
+function recalcFromParams(params, originalResult, prices) {
+  const {
+    total_calls_month, pct_informative_low, pct_informative_high,
+    months_low_season, months_high_season, automation_levels,
+    avg_duration_sec, turns_per_conv, avg_input_tokens, avg_output_tokens,
+    avg_tts_chars, pct_with_tts,
+  } = params;
+
+  // Derive total annual traffic
+  const totalAnnualTraffic = total_calls_month * 12;
+
+  // Get unique TTS model variants from original scenarios (aggregato group)
+  const origAgg = (originalResult.groups?.["aggregato"] || originalResult.scenarios || []);
+  const ttsModels = [...new Set(origAgg.map(s => s.ttsModel))];
+  const asrModel = origAgg[0]?.asrModel || "google_asr_standard";
+  const llmModel = origAgg[0]?.llmModel || "gemini_flash";
+
+  // Get entity weights from original per_entita if available
+  const origEntities = originalResult.groups?.["per_entita"] || [];
+  const entityWeights = {};
+  if (origEntities.length > 0) {
+    // Get unique entity names and their proportional weights from original first variant
+    const firstVariant = origEntities[0]?.variant;
+    origEntities.filter(s => s.variant === firstVariant).forEach(s => {
+      const name = (s.label || "").trim();
+      entityWeights[name] = s._config?.conversations || s.conversations || 0;
+    });
+    const weightTotal = Object.values(entityWeights).reduce((a, b) => a + b, 0);
+    if (weightTotal > 0) {
+      for (const k of Object.keys(entityWeights)) {
+        entityWeights[k] = entityWeights[k] / weightTotal;
+      }
+    }
+  }
+
+  const newScenarios = [];
+
+  for (const autoLevel of automation_levels) {
+    for (const tts of ttsModels) {
+      const variantKey = ttsModels.length > 1 || automation_levels.length > 1
+        ? `${autoLevel.label.toLowerCase()}_${tts.replace("google_tts_", "").replace("elevenlabs_", "")}`
+        : "default";
+
+      // Low season conversations
+      const lowInfoCalls = total_calls_month * (pct_informative_low / 100);
+      const lowAiConv = Math.round(lowInfoCalls * (autoLevel.pct / 100) * months_low_season);
+
+      // High season conversations
+      const highInfoCalls = total_calls_month * (pct_informative_high / 100);
+      const highAiConv = Math.round(highInfoCalls * (autoLevel.pct / 100) * months_high_season);
+
+      const baseCfg = { avgDurationSec: avg_duration_sec, turnsPerConv: turns_per_conv, asrModel, ttsModel: tts, llmModel, avgInputTokens: avg_input_tokens, avgOutputTokens: avg_output_tokens, avgTtsChars: avg_tts_chars, pctWithTts: pct_with_tts };
+
+      // Aggregated scenarios
+      const lowCfg = { ...baseCfg, conversations: lowAiConv, periodMonths: months_low_season };
+      const highCfg = { ...baseCfg, conversations: highAiConv, periodMonths: months_high_season };
+
+      const ttsLabel = tts.includes("studio") || tts.includes("chirp") ? "Chirp3" : tts.replace("google_tts_", "").replace("elevenlabs_", "").replace(/\b\w/g, c => c.toUpperCase());
+
+      newScenarios.push({
+        group: "aggregato", variant: variantKey,
+        label: `Bassa stagione - ${autoLevel.label} (${autoLevel.pct}%) - ${ttsLabel}`,
+        period: `${months_low_season} mesi bassa stagione`, periodMonths: months_low_season,
+        conversations: lowAiConv, ...baseCfg,
+        note: `${fmtInt(lowAiConv)} = ${fmtInt(total_calls_month)} × ${pct_informative_low}% info × ${autoLevel.pct}% auto × ${months_low_season} mesi`,
+        _config: lowCfg, results: calcCosts(lowCfg, prices),
+      });
+      newScenarios.push({
+        group: "aggregato", variant: variantKey,
+        label: `Alta stagione - ${autoLevel.label} (${autoLevel.pct}%) - ${ttsLabel}`,
+        period: `${months_high_season} mesi alta stagione`, periodMonths: months_high_season,
+        conversations: highAiConv, ...baseCfg,
+        note: `${fmtInt(highAiConv)} = ${fmtInt(total_calls_month)} × ${pct_informative_high}% info × ${autoLevel.pct}% auto × ${months_high_season} mesi`,
+        _config: highCfg, results: calcCosts(highCfg, prices),
+      });
+
+      // Per-entity scenarios (if original had them)
+      if (Object.keys(entityWeights).length > 0) {
+        const totalAiAnnual = lowAiConv + highAiConv;
+        for (const [entityName, weight] of Object.entries(entityWeights)) {
+          const entityConv = Math.round(totalAiAnnual * weight);
+          const entityCfg = { ...baseCfg, conversations: entityConv, periodMonths: 12 };
+          newScenarios.push({
+            group: "per_entita", variant: variantKey,
+            label: entityName.includes(autoLevel.label) ? entityName : `${entityName}`,
+            period: "Annuale", periodMonths: 12,
+            conversations: entityConv, ...baseCfg,
+            _config: entityCfg, results: calcCosts(entityCfg, prices),
+          });
+        }
+      }
+    }
+  }
+
+  // Rebuild groups, variants, totals (same logic as in analyze())
+  const groups = {};
+  newScenarios.forEach(s => {
+    const g = s.group || "aggregato";
+    if (!groups[g]) groups[g] = [];
+    groups[g].push(s);
+  });
+  const hasMultipleGroups = Object.keys(groups).length > 1;
+
+  const groupTotals = {};
+  for (const [g, scenarios] of Object.entries(groups)) {
+    const gVariants = {};
+    scenarios.forEach(s => {
+      const v = s.variant || "default";
+      if (!gVariants[v]) gVariants[v] = 0;
+      gVariants[v] += s.results.totalCost;
+    });
+    const gVariantCosts = Object.values(gVariants);
+    groupTotals[g] = { min: Math.min(...gVariantCosts), max: Math.max(...gVariantCosts), hasRange: gVariantCosts.length > 1, count: scenarios.length, variantCount: gVariantCosts.length };
+  }
+
+  const primaryGroup = groups["aggregato"] || Object.values(groups)[0] || [];
+  const variants = {};
+  primaryGroup.forEach(s => {
+    const v = s.variant || "default";
+    if (!variants[v]) variants[v] = [];
+    variants[v].push(s);
+  });
+  const hasVariants = Object.keys(variants).length > 1;
+  const variantTotals = {};
+  for (const [v, vScenarios] of Object.entries(variants)) {
+    const total = vScenarios.reduce((a, s) => a + s.results.totalCost, 0);
+    const totalMonths = vScenarios.reduce((a, s) => a + (s._config.periodMonths || 1), 0);
+    const monthly = totalMonths > 0 ? total / totalMonths : total;
+    const totalConv = vScenarios.reduce((a, s) => a + (s._config.conversations || 0), 0);
+    const label = v.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    variantTotals[v] = { total, monthly, totalMonths, totalConv, count: vScenarios.length, label };
+  }
+
+  const variantCosts = Object.values(variantTotals).map(v => v.total);
+  const grandTotal = hasVariants ? Math.min(...variantCosts) : variantCosts.reduce((a, b) => a + b, 0);
+  const grandTotalMax = hasVariants ? Math.max(...variantCosts) : grandTotal;
+  const variantMonthlies = Object.values(variantTotals).map(v => v.monthly);
+  const grandTotalMonthly = hasVariants ? Math.min(...variantMonthlies) : variantMonthlies.reduce((a, b) => a + b, 0);
+  const grandTotalMonthlyMax = hasVariants ? Math.max(...variantMonthlies) : grandTotalMonthly;
+
+  return {
+    _isRecalc: true,
+    summary: originalResult.summary,
+    scenarios: newScenarios,
+    groups, groupTotals, hasMultipleGroups,
+    variants, variantTotals, hasVariants,
+    grandTotal, grandTotalMax, grandTotalMonthly, grandTotalMonthlyMax,
+    totalAnnualTraffic,
+    parameters: params,
+  };
+}
+
+// ─── Parameters Dashboard (left panel, below prompt) ───
+function ParametersDashboard({ prices }) {
+  const { aiResult, setAiResult, originalAiResult } = useContext(AiContext);
+  const [editedParams, setEditedParams] = useState(null);
+  const [isModified, setIsModified] = useState(false);
+
+  // Sync edited params when aiResult changes from a new AI response
+  useEffect(() => {
+    if (aiResult?.parameters && !aiResult._isRecalc) {
+      setEditedParams({ ...aiResult.parameters });
+      setIsModified(false);
+    }
+  }, [aiResult]);
+
+  if (!aiResult?.parameters || !editedParams) return null;
+
+  const updateParam = (key, value) => {
+    const newParams = { ...editedParams, [key]: value };
+    setEditedParams(newParams);
+    setIsModified(true);
+    // Live recalculation
+    const original = originalAiResult.current || aiResult;
+    const recalced = recalcFromParams(newParams, original, prices);
+    setAiResult(recalced);
+  };
+
+  const updateAutoLevel = (index, newPct) => {
+    const levels = [...editedParams.automation_levels];
+    levels[index] = { ...levels[index], pct: newPct };
+    const newParams = { ...editedParams, automation_levels: levels };
+    setEditedParams(newParams);
+    setIsModified(true);
+    const original = originalAiResult.current || aiResult;
+    setAiResult(recalcFromParams(newParams, original, prices));
+  };
+
+  const resetParams = () => {
+    const original = originalAiResult.current;
+    if (original) {
+      setAiResult(original);
+      setEditedParams({ ...original.parameters });
+      setIsModified(false);
+    }
+  };
+
+  // Reusable number input with +/- buttons
+  const NumField = ({ label, value, onChange, step = 1, min = 0, max = Infinity, unit = "", small = false }) => (
+    <div className="param-field">
+      <div className="param-field-label">{label}</div>
+      <div className="param-field-control">
+        <button className="param-btn" onClick={() => onChange(Math.max(min, value - step))} disabled={value <= min}>−</button>
+        <input
+          className={`param-input ${small ? "param-input-sm" : ""}`}
+          type="number"
+          value={value}
+          onChange={e => {
+            const v = parseFloat(e.target.value);
+            if (!isNaN(v) && v >= min && v <= max) onChange(v);
+          }}
+          min={min}
+          max={max}
+          step={step}
+        />
+        <button className="param-btn" onClick={() => onChange(Math.min(max, value + step))} disabled={value >= max}>+</button>
+        {unit && <span className="param-unit">{unit}</span>}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="params-dashboard">
+      <div className="params-dashboard-header">
+        <span className="params-dashboard-title">⚙ Parametri estratti dall'AI</span>
+        {isModified && (
+          <button className="params-reset-btn" onClick={resetParams}>↺ Reset</button>
+        )}
+      </div>
+      {isModified && (
+        <div className="params-modified-badge">✎ Valori modificati — ricalcolo live attivo</div>
+      )}
+
+      {/* Volume & Funnel */}
+      <div className="params-section">
+        <div className="params-section-label">Volume & Funnel</div>
+        <NumField label="Chiamate/mese" value={editedParams.total_calls_month} onChange={v => updateParam("total_calls_month", v)} step={1000} min={100} unit="/mese" />
+        <div className="params-row-2col">
+          <NumField label="% info bassa stag." value={editedParams.pct_informative_low} onChange={v => updateParam("pct_informative_low", v)} step={5} min={0} max={100} unit="%" small />
+          <NumField label="% info alta stag." value={editedParams.pct_informative_high} onChange={v => updateParam("pct_informative_high", v)} step={5} min={0} max={100} unit="%" small />
+        </div>
+        <div className="params-row-2col">
+          <NumField label="Mesi bassa" value={editedParams.months_low_season} onChange={v => updateParam("months_low_season", v)} step={1} min={0} max={12} small />
+          <NumField label="Mesi alta" value={editedParams.months_high_season} onChange={v => updateParam("months_high_season", v)} step={1} min={0} max={12} small />
+        </div>
+      </div>
+
+      {/* Automation levels */}
+      <div className="params-section">
+        <div className="params-section-label">Automazione Bot</div>
+        {editedParams.automation_levels.map((level, i) => (
+          <NumField key={i} label={level.label} value={level.pct} onChange={v => updateAutoLevel(i, v)} step={5} min={0} max={100} unit="%" />
+        ))}
+      </div>
+
+      {/* Conversation parameters */}
+      <div className="params-section">
+        <div className="params-section-label">Parametri conversazione</div>
+        <NumField label="Durata media" value={editedParams.avg_duration_sec} onChange={v => updateParam("avg_duration_sec", v)} step={10} min={0} unit="sec" />
+        <NumField label="Turni/conv." value={editedParams.turns_per_conv} onChange={v => updateParam("turns_per_conv", v)} step={1} min={1} max={20} />
+        <div className="params-row-2col">
+          <NumField label="Token input" value={editedParams.avg_input_tokens} onChange={v => updateParam("avg_input_tokens", v)} step={100} min={10} small />
+          <NumField label="Token output" value={editedParams.avg_output_tokens} onChange={v => updateParam("avg_output_tokens", v)} step={50} min={10} small />
+        </div>
+        <NumField label="Caratteri TTS" value={editedParams.avg_tts_chars} onChange={v => updateParam("avg_tts_chars", v)} step={50} min={0} />
+      </div>
     </div>
   );
 }
@@ -1471,6 +1781,9 @@ function ScenarioBuilder({ prices, markup, setPrices, setMarkup }) {
         </div>
 
         <AiAssistantInput prices={prices} markup={markup} />
+
+        {/* Parameters dashboard — shows AI-extracted values, editable with live recalc */}
+        <ParametersDashboard prices={prices} />
 
         {/* Save/Load section */}
         <div className="builder-save-section">
